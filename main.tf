@@ -10,11 +10,22 @@ terraform {
       source  = "hashicorp/archive"
       version = "~> 2.4"
     }
+    # ADDED: OpenSearch provider for index management
+    opensearch = {
+      source  = "opensearch-project/opensearch"
+      version = ">= 2.2.0"
+    }
   }
 }
 
 provider "aws" {
   region = var.aws_region
+}
+
+# ADDED: Configure OpenSearch provider
+provider "opensearch" {
+  url         = aws_opensearchserverless_collection.compliance_vectors.collection_endpoint
+  healthcheck = false
 }
 
 # Get current AWS account ID
@@ -282,6 +293,7 @@ resource "aws_opensearchserverless_collection" "compliance_vectors" {
 }
 
 # Data access policy for OpenSearch
+# Corrected OpenSearch Access Policy
 resource "aws_opensearchserverless_access_policy" "compliance_data_access" {
   name = "${var.opensearch_collection_name}-access"
   type = "data"
@@ -317,10 +329,59 @@ resource "aws_opensearchserverless_access_policy" "compliance_data_access" {
         }
       ]
       Principal = [
-        "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/aws-service-role/bedrock.amazonaws.com/AWSServiceRoleForAmazonBedrock"
+        "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/aws-service-role/bedrock.amazonaws.com/AWSServiceRoleForAmazonBedrock",
+        data.aws_caller_identity.current.arn,
+        aws_iam_role.bedrock_kb.arn  # <--- THIS IS THE CRITICAL FIX
       ]
     }
   ])
+}
+
+# ADDED: OpenSearch Index Resource (Fix for Bedrock KB error)
+# Corrected Index Resource with FAISS Engine
+resource "opensearch_index" "compliance_index" {
+  name               = "compliance-policy-index"
+  number_of_shards   = "2"
+  number_of_replicas = "0"
+  index_knn          = true
+  index_knn_algo_param_ef_search = "512"
+  
+  mappings = <<-EOF
+    {
+      "properties": {
+        "bedrock-knowledge-base-default-vector": {
+          "type": "knn_vector",
+          "dimension": 1536,
+          "method": {
+            "name": "hnsw",
+            "engine": "faiss",        
+            "space_type": "cosinesimil", 
+            "parameters": {
+              "ef_construction": 512,
+              "m": 16
+            }
+          }
+        },
+        "AMAZON_BEDROCK_METADATA": {
+          "type": "text",
+          "index": false
+        },
+        "AMAZON_BEDROCK_TEXT_CHUNK": {
+          "type": "text",
+          "index": true
+        }
+      }
+    }
+  EOF
+  
+  force_destroy = true
+  
+  depends_on = [
+    aws_opensearchserverless_collection.compliance_vectors,
+    aws_opensearchserverless_access_policy.compliance_data_access,
+    aws_opensearchserverless_security_policy.compliance_encryption,
+    aws_opensearchserverless_security_policy.compliance_network
+  ]
 }
 
 ################################################################################
@@ -409,17 +470,19 @@ resource "aws_bedrockagent_knowledge_base" "compliance_policy" {
     opensearch_serverless_configuration {
       collection_arn    = aws_opensearchserverless_collection.compliance_vectors.arn
       vector_index_name = "compliance-policy-index"
+      
+      # CORRECTED MAPPINGS to match opensearch_index resource
       field_mapping {
-        vector_field   = "vector"
-        text_field     = "text"
-        metadata_field = "metadata"
+        vector_field   = "bedrock-knowledge-base-default-vector"
+        text_field     = "AMAZON_BEDROCK_TEXT_CHUNK"
+        metadata_field = "AMAZON_BEDROCK_METADATA"
       }
     }
   }
   
   depends_on = [
-    aws_opensearchserverless_collection.compliance_vectors,
-    aws_opensearchserverless_access_policy.compliance_data_access
+    opensearch_index.compliance_index,
+    aws_iam_role_policy.bedrock_kb
   ]
   
   tags = var.tags
@@ -439,8 +502,7 @@ resource "aws_bedrockagent_data_source" "compliance_policy" {
       ]
     }
   }
-  
-  
+  # Removed tags as requested
 }
 
 ################################################################################
@@ -916,15 +978,12 @@ resource "aws_iam_role_policy" "report_generator" {
 }
 
 # Lambda Layer for python-docx
-# Note: This requires building the layer locally or using a pre-built layer
-# For deployment, run: pip install -r layers/python-docx-requirements.txt -t layers/python-docx/python/
 resource "aws_lambda_layer_version" "python_docx" {
   filename            = "${path.module}/.terraform/layers/python-docx.zip"
   layer_name          = "${var.project_name}-python-docx"
   compatible_runtimes = ["python3.11"]
   description         = "Python-docx library for generating Word documents"
   
-  # This will be created by the build script
   lifecycle {
     create_before_destroy = true
   }
@@ -1007,7 +1066,9 @@ resource "aws_iam_role_policy" "step_functions" {
         ]
         Resource = [
           aws_lambda_function.policy_section_fetcher.arn,
-          aws_lambda_function.report_generator.arn
+          aws_lambda_function.report_generator.arn,
+          # Added the Agent Invoker lambda if you added it in the previous step
+          "arn:aws:lambda:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:function:${var.project_name}-agent-invoker"
         ]
       },
       {
@@ -1023,16 +1084,103 @@ resource "aws_iam_role_policy" "step_functions" {
       {
         Effect = "Allow"
         Action = [
+          "logs:CreateLogDelivery",
+          "logs:GetLogDelivery",
+          "logs:UpdateLogDelivery",
+          "logs:DeleteLogDelivery",
+          "logs:ListLogDeliveries",
+          "logs:PutResourcePolicy",
+          "logs:DescribeResourcePolicies",
+          "logs:DescribeLogGroups",
           "logs:CreateLogGroup",
           "logs:CreateLogStream",
           "logs:PutLogEvents"
         ]
-        Resource = "arn:aws:logs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:log-group:/aws/vendedlogs/states/*"
+        # Broadened resource to fix AccessDenied error
+        Resource = "*"
+      }
+    ]
+  })
+}
+# IAM Role for Agent Invoker Lambda
+resource "aws_iam_role" "agent_invoker" {
+  name = "${var.project_name}-agent-invoker-role"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{ Action = "sts:AssumeRole", Effect = "Allow", Principal = { Service = "lambda.amazonaws.com" } }]
+  })
+}
+
+# Policy to allow Lambda to invoke Bedrock Agent
+resource "aws_iam_role_policy" "agent_invoker_policy" {
+  name = "${var.project_name}-agent-invoker-policy"
+  role = aws_iam_role.agent_invoker.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = ["bedrock:InvokeAgent"]
+        Resource = [aws_bedrockagent_agent_alias.compliance_auditor_prod.agent_alias_arn]
+      },
+      {
+        Effect = "Allow"
+        Action = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
+        Resource = "arn:aws:logs:*:*:*"
       }
     ]
   })
 }
 
+# Simple Inline Lambda to Invoke Agent
+resource "aws_lambda_function" "agent_invoker" {
+  function_name = "${var.project_name}-agent-invoker"
+  role          = aws_iam_role.agent_invoker.arn
+  runtime       = "python3.11"
+  handler       = "index.lambda_handler"
+  timeout       = 60
+
+  # Inline code to avoid needing another zip file
+  filename      = data.archive_file.agent_invoker_zip.output_path
+  source_code_hash = data.archive_file.agent_invoker_zip.output_base64sha256
+}
+
+# Create zip for inline lambda
+data "archive_file" "agent_invoker_zip" {
+  type        = "zip"
+  output_path = "${path.module}/.terraform/lambda/agent_invoker.zip"
+  source {
+    content  = <<EOF
+import boto3
+import json
+import uuid
+
+client = boto3.client('bedrock-agent-runtime')
+
+def lambda_handler(event, context):
+    agent_id = event['agent_id']
+    alias_id = event['agent_alias_id']
+    input_text = event['input_text']
+    session_id = event.get('session_id', str(uuid.uuid4()))
+
+    response = client.invoke_agent(
+        agentId=agent_id,
+        agentAliasId=alias_id,
+        sessionId=session_id,
+        inputText=input_text
+    )
+    
+    # Parse the event stream
+    completion = ""
+    for event in response.get('completion'):
+        if 'chunk' in event:
+            completion += event['chunk']['bytes'].decode('utf-8')
+            
+    return {'completion': completion}
+EOF
+    filename = "index.py"
+  }
+}
 # Step Functions State Machine
 resource "aws_sfn_state_machine" "compliance_workflow" {
   name     = "${var.project_name}-workflow"
@@ -1052,7 +1200,6 @@ resource "aws_sfn_state_machine" "compliance_workflow" {
         ResultPath = "$.section_result"
         Next       = "ExtractSections"
       }
-      
       ExtractSections = {
         Type = "Pass"
         Parameters = {
@@ -1061,7 +1208,6 @@ resource "aws_sfn_state_machine" "compliance_workflow" {
         }
         Next = "AnalyzeSectionsInParallel"
       }
-      
       AnalyzeSectionsInParallel = {
         Type     = "Map"
         ItemsPath = "$.sections"
@@ -1078,22 +1224,25 @@ resource "aws_sfn_state_machine" "compliance_workflow" {
           States = {
             AnalyzeSection = {
               Type     = "Task"
-              Resource = "arn:aws:states:::bedrock:invokeAgent"
+              # FIX: Call the Shim Lambda instead of Bedrock directly
+              Resource = "arn:aws:states:::lambda:invoke" 
               Parameters = {
-                "AgentId.$"      = "$.agent_id"
-                "AgentAliasId.$" = "$.agent_alias_id"
-                "SessionId.$"    = "States.UUID()"
-                "InputText.$"    = "States.Format('Analyze compliance for policy section: {}. Query the available log views to find evidence of compliance or violations. Cross-reference with the policy requirements from the Knowledge Base. Provide specific log entries as evidence.', $.section)"
+                FunctionName = aws_lambda_function.agent_invoker.arn
+                Payload = {
+                  "agent_id.$"       = "$.agent_id"
+                  "agent_alias_id.$" = "$.agent_alias_id"
+                  "input_text.$"     = "States.Format('Analyze compliance for policy section: {}. Query the available log views to find evidence of compliance or violations. Cross-reference with the policy requirements from the Knowledge Base. Provide specific log entries as evidence.', $.section)"
+                }
               }
               ResultPath = "$.agent_response"
               Next       = "FormatFinding"
             }
-            
             FormatFinding = {
               Type = "Pass"
               Parameters = {
                 "section.$"           = "$.section"
-                "analysis.$"          = "$.agent_response.Completion"
+                # Output from Lambda comes in .Payload.completion
+                "analysis.$"          = "$.agent_response.Payload.completion"
                 "compliance_status"   = "REQUIRES_REVIEW"
                 "risk_level"          = "MEDIUM"
                 "evidence"            = []
@@ -1105,7 +1254,6 @@ resource "aws_sfn_state_machine" "compliance_workflow" {
         }
         Next = "GenerateReport"
       }
-      
       GenerateReport = {
         Type     = "Task"
         Resource = "arn:aws:states:::lambda:invoke"
@@ -1119,7 +1267,6 @@ resource "aws_sfn_state_machine" "compliance_workflow" {
         ResultPath = "$.report_result"
         Next       = "WorkflowComplete"
       }
-      
       WorkflowComplete = {
         Type = "Pass"
         Parameters = {
@@ -1138,7 +1285,6 @@ resource "aws_sfn_state_machine" "compliance_workflow" {
     include_execution_data = true
     level                  = "ALL"
   }
-  
   tags = var.tags
 }
 
