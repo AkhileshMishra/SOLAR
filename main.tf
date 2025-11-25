@@ -229,35 +229,38 @@ resource "aws_iam_role_policy" "log_ingestion_agent" {
 
 # OpenSearch Serverless encryption policy
 resource "aws_opensearchserverless_security_policy" "compliance_encryption" {
-  name = "${var.opensearch_collection_name}-encryption"
-  type = "encryption"
-  
+  name        = "compliance-enc-policy"
+  type        = "encryption"
+  description = "Encryption policy for compliance collection"
+
   policy = jsonencode({
     Rules = [
       {
-        Resource = [
-          "collection/${var.opensearch_collection_name}"
-        ]
         ResourceType = "collection"
+        Resource     = ["collection/${var.opensearch_collection_name}"]
       }
-    ]
+    ],
     AWSOwnedKey = true
   })
 }
 
 # OpenSearch Serverless network policy
 resource "aws_opensearchserverless_security_policy" "compliance_network" {
-  name = "${var.opensearch_collection_name}-network"
-  type = "network"
-  
+  name        = "compliance-net-policy"
+  type        = "network"
+  description = "Network policy for compliance collection"
+
   policy = jsonencode([
     {
+      Description = "Public access for dashboard and API"
       Rules = [
         {
-          Resource = [
-            "collection/${var.opensearch_collection_name}"
-          ]
           ResourceType = "collection"
+          Resource     = ["collection/${var.opensearch_collection_name}"]
+        },
+        {
+          ResourceType = "dashboard"
+          Resource     = ["collection/${var.opensearch_collection_name}"]
         }
       ]
       AllowFromPublic = true
@@ -437,7 +440,7 @@ resource "aws_bedrockagent_data_source" "compliance_policy" {
     }
   }
   
-  tags = var.tags
+  
 }
 
 ################################################################################
