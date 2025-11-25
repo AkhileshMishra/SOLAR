@@ -1,0 +1,142 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "Compliance Auditor Agent API",
+    "version": "1.0.0",
+    "description": "API schema for Bedrock Agent to query Athena views and retrieve compliance log data"
+  },
+  "paths": {
+    "/query-athena": {
+      "post": {
+        "summary": "Execute Athena SQL query against compliance log views",
+        "description": "Allows the agent to query Athena views created from ingested logs. The agent can filter, aggregate, and analyze log data using SQL.",
+        "operationId": "queryAthena",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "query": {
+                    "type": "string",
+                    "description": "SQL SELECT statement to execute against the compliance_db database. Must be a valid Athena SQL query."
+                  },
+                  "max_results": {
+                    "type": "integer",
+                    "description": "Maximum number of rows to return (default: 100, max: 1000)",
+                    "default": 100,
+                    "minimum": 1,
+                    "maximum": 1000
+                  }
+                },
+                "required": ["query"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Query executed successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "columns": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Column names from the query result"
+                    },
+                    "rows": {
+                      "type": "array",
+                      "items": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "description": "Result rows as arrays of string values"
+                    },
+                    "row_count": {
+                      "type": "integer",
+                      "description": "Number of rows returned"
+                    },
+                    "execution_time_ms": {
+                      "type": "integer",
+                      "description": "Query execution time in milliseconds"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query syntax or parameters"
+          },
+          "500": {
+            "description": "Query execution failed"
+          }
+        }
+      }
+    },
+    "/list-views": {
+      "get": {
+        "summary": "List available Athena views in compliance_db",
+        "description": "Returns a list of all available views that the agent can query, along with their column schemas",
+        "operationId": "listViews",
+        "responses": {
+          "200": {
+            "description": "Views retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "views": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "view_name": {
+                            "type": "string",
+                            "description": "Name of the view"
+                          },
+                          "source_type": {
+                            "type": "string",
+                            "description": "Source system (servicenow, cato, saviynt, syslog)"
+                          },
+                          "columns": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "name": {
+                                  "type": "string"
+                                },
+                                "type": {
+                                  "type": "string"
+                                }
+                              }
+                            },
+                            "description": "Column definitions"
+                          },
+                          "row_count": {
+                            "type": "integer",
+                            "description": "Approximate number of rows"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
