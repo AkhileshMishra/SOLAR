@@ -160,6 +160,7 @@ resource "aws_iam_role" "log_ingestion_agent" {
 }
 
 # Policy for LogIngestionAgent Lambda
+# Corrected IAM Policy for Log Ingestion Agent
 resource "aws_iam_role_policy" "log_ingestion_agent" {
   name = "${var.project_name}-log-ingestion-agent-policy"
   role = aws_iam_role.log_ingestion_agent.id
@@ -186,15 +187,14 @@ resource "aws_iam_role_policy" "log_ingestion_agent" {
         Resource = "arn:aws:bedrock:${data.aws_region.current.name}::foundation-model/${var.bedrock_model_id}"
       },
       {
+        # UPDATED BLOCK: Allow Athena access broadly to fix 403
         Effect = "Allow"
         Action = [
           "athena:StartQueryExecution",
           "athena:GetQueryExecution",
           "athena:GetQueryResults"
         ]
-        Resource = [
-          aws_athena_workgroup.compliance_auditor.arn
-        ]
+        Resource = "*"  # <--- CHANGED FROM SPECIFIC ARN TO WILDCARD
       },
       {
         Effect = "Allow"
@@ -215,10 +215,13 @@ resource "aws_iam_role_policy" "log_ingestion_agent" {
         Effect = "Allow"
         Action = [
           "s3:GetObject",
-          "s3:PutObject"
+          "s3:PutObject",
+          # Added GetBucketLocation which Athena sometimes needs
+          "s3:GetBucketLocation" 
         ]
         Resource = [
-          "${aws_s3_bucket.compliance_data.arn}/athena-results/*"
+          "${aws_s3_bucket.compliance_data.arn}/athena-results/*",
+          aws_s3_bucket.compliance_data.arn
         ]
       },
       {
@@ -520,12 +523,17 @@ data "archive_file" "log_ingestion_agent" {
 resource "aws_lambda_function" "log_ingestion_agent" {
   filename         = data.archive_file.log_ingestion_agent.output_path
   function_name    = "${var.project_name}-log-ingestion-agent"
-  role            = aws_iam_role.log_ingestion_agent.arn
-  handler         = "lambda_function.lambda_handler"
+  role             = aws_iam_role.log_ingestion_agent.arn
+  handler          = "lambda_function.lambda_handler"
   source_code_hash = data.archive_file.log_ingestion_agent.output_base64sha256
-  runtime         = "python3.11"
-  timeout         = 300  # 5 minutes for processing and Bedrock invocation
-  memory_size     = 512
+  runtime          = "python3.11"
+  
+  # UPDATED: Increase limits for Excel processing
+  timeout          = 600  
+  memory_size      = 1024 
+  
+  # UPDATED: Attach the new layer
+  layers           = [aws_lambda_layer_version.pandas_layer.arn]
   
   environment {
     variables = {
@@ -987,6 +995,15 @@ resource "aws_lambda_layer_version" "python_docx" {
   lifecycle {
     create_before_destroy = true
   }
+}
+# NEW: Pandas Layer for Excel Support
+resource "aws_lambda_layer_version" "pandas_layer" {
+  filename            = "${path.module}/.terraform/layers/pandas-layer.zip"
+  layer_name          = "${var.project_name}-pandas-layer"
+  compatible_runtimes = ["python3.11"]
+  description         = "Pandas and OpenPyXL for Excel processing"
+  
+  source_code_hash    = filebase64sha256("${path.module}/.terraform/layers/pandas-layer.zip")
 }
 
 # Package Report Generator Lambda
