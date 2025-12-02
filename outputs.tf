@@ -18,14 +18,11 @@ output "athena_workgroup_name" {
   value       = aws_athena_workgroup.compliance_auditor.name
 }
 
-output "opensearch_collection_endpoint" {
-  description = "Endpoint for OpenSearch Serverless collection"
-  value       = aws_opensearchserverless_collection.compliance_vectors.collection_endpoint
-}
+
 
 output "knowledge_base_id" {
   description = "ID of the Bedrock Knowledge Base"
-  value       = aws_bedrockagent_knowledge_base.compliance_policy.id
+  value       = "BL63WWBBCS"
 }
 
 output "bedrock_agent_id" {
@@ -70,7 +67,7 @@ output "deployment_instructions" {
      
   3. Sync the Knowledge Base:
      aws bedrock-agent start-ingestion-job \
-       --knowledge-base-id ${aws_bedrockagent_knowledge_base.compliance_policy.id} \
+       --knowledge-base-id "BL63WWBBCS" \
        --data-source-id <data-source-id>
      
   4. Upload log files to trigger ingestion:

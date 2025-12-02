@@ -11,21 +11,21 @@ variable "project_name" {
 }
 
 variable "bedrock_model_id" {
-  description = "Bedrock model ID for Claude 3.5 Sonnet"
+  description = "Bedrock Inference Profile ID"
   type        = string
-  default     = "anthropic.claude-3-5-sonnet-20240620-v1:0"
+  default     = "apac.anthropic.claude-sonnet-4-20250514-v1:0"
 }
 
 variable "bedrock_embedding_model_id" {
   description = "Bedrock embedding model ID for Knowledge Base"
   type        = string
-  default     = "amazon.titan-embed-text-v1"
+  default     = "cohere.embed-english-v3"
 }
 
 variable "s3_bucket_name" {
   description = "S3 bucket name for compliance data (will append account ID)"
   type        = string
-  default     = "compliance-reporting-bucket"
+  default     = "compliance-reporting-bucket-sg"
 }
 
 variable "glue_database_name" {

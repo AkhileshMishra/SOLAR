@@ -10,23 +10,26 @@ terraform {
       source  = "hashicorp/archive"
       version = "~> 2.4"
     }
-    # ADDED: OpenSearch provider for index management
-    opensearch = {
-      source  = "opensearch-project/opensearch"
-      version = ">= 2.2.0"
-    }
+   
   }
+}
+
+# Fetch the full ARN of the Inference Profile
+data "aws_bedrock_inference_profile" "current" {
+  inference_profile_id = var.bedrock_model_id
 }
 
 provider "aws" {
   region = var.aws_region
+  assume_role {
+    role_arn     = "arn:aws:iam::430118833069:role/KAIZERODeploymentServer"
+    session_name = "TerraformDeploymentSession"
+  }
 }
 
-# ADDED: Configure OpenSearch provider
-provider "opensearch" {
-  url         = aws_opensearchserverless_collection.compliance_vectors.collection_endpoint
-  healthcheck = false
-}
+# Configure OpenSearch provider
+# Relies on Environment Variables set in PowerShell
+
 
 # Get current AWS account ID
 data "aws_caller_identity" "current" {}
@@ -139,7 +142,7 @@ resource "aws_athena_workgroup" "compliance_auditor" {
 # Layer 2: Auto-DDL Ingestion Layer (IAM Roles)
 ################################################################################
 
-# IAM Role for LogIngestionAgent Lambda
+# IAM Role for LogIngestionAgent Lambda AND Glue Crawler
 resource "aws_iam_role" "log_ingestion_agent" {
   name = "${var.project_name}-log-ingestion-agent-role"
   
@@ -150,7 +153,10 @@ resource "aws_iam_role" "log_ingestion_agent" {
         Action = "sts:AssumeRole"
         Effect = "Allow"
         Principal = {
-          Service = "lambda.amazonaws.com"
+          Service = [
+            "lambda.amazonaws.com",
+            "glue.amazonaws.com"
+          ]
         }
       }
     ]
@@ -160,7 +166,6 @@ resource "aws_iam_role" "log_ingestion_agent" {
 }
 
 # Policy for LogIngestionAgent Lambda
-# Corrected IAM Policy for Log Ingestion Agent
 resource "aws_iam_role_policy" "log_ingestion_agent" {
   name = "${var.project_name}-log-ingestion-agent-policy"
   role = aws_iam_role.log_ingestion_agent.id
@@ -172,29 +177,39 @@ resource "aws_iam_role_policy" "log_ingestion_agent" {
         Effect = "Allow"
         Action = [
           "s3:GetObject",
+          "s3:PutObject",
+          "s3:GetBucketLocation",
           "s3:ListBucket"
         ]
         Resource = [
           aws_s3_bucket.compliance_data.arn,
-          "${aws_s3_bucket.compliance_data.arn}/inputs/logs/*"
+          "${aws_s3_bucket.compliance_data.arn}/*"
         ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "glue:StartCrawler"
+        ]
+        Resource = "*" 
       },
       {
         Effect = "Allow"
         Action = [
           "bedrock:InvokeModel"
         ]
-        Resource = "arn:aws:bedrock:${data.aws_region.current.name}::foundation-model/${var.bedrock_model_id}"
+        Resource = [
+          data.aws_bedrock_inference_profile.current.inference_profile_arn
+        ]
       },
       {
-        # UPDATED BLOCK: Allow Athena access broadly to fix 403
         Effect = "Allow"
         Action = [
           "athena:StartQueryExecution",
           "athena:GetQueryExecution",
           "athena:GetQueryResults"
         ]
-        Resource = "*"  # <--- CHANGED FROM SPECIFIC ARN TO WILDCARD
+        Resource = "*" 
       },
       {
         Effect = "Allow"
@@ -203,7 +218,10 @@ resource "aws_iam_role_policy" "log_ingestion_agent" {
           "glue:GetTable",
           "glue:GetTables",
           "glue:CreateTable",
-          "glue:UpdateTable"
+          "glue:UpdateTable",
+		  "glue:BatchGetPartition",
+          "glue:BatchCreatePartition",
+          "glue:BatchUpdatePartition"
         ]
         Resource = [
           "arn:aws:glue:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:catalog",
@@ -214,24 +232,14 @@ resource "aws_iam_role_policy" "log_ingestion_agent" {
       {
         Effect = "Allow"
         Action = [
-          "s3:GetObject",
-          "s3:PutObject",
-          # Added GetBucketLocation which Athena sometimes needs
-          "s3:GetBucketLocation" 
-        ]
-        Resource = [
-          "${aws_s3_bucket.compliance_data.arn}/athena-results/*",
-          aws_s3_bucket.compliance_data.arn
-        ]
-      },
-      {
-        Effect = "Allow"
-        Action = [
           "logs:CreateLogGroup",
           "logs:CreateLogStream",
           "logs:PutLogEvents"
         ]
-        Resource = "arn:aws:logs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:log-group:/aws/lambda/*"
+        Resource = [
+          "arn:aws:logs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:log-group:/aws/lambda/*",
+          "arn:aws:logs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:log-group:/aws-glue/*"
+        ]
       }
     ]
   })
@@ -241,285 +249,30 @@ resource "aws_iam_role_policy" "log_ingestion_agent" {
 # Layer 3: AI Reasoning Core - OpenSearch Serverless
 ################################################################################
 
-# OpenSearch Serverless encryption policy
-resource "aws_opensearchserverless_security_policy" "compliance_encryption" {
-  name        = "compliance-enc-policy"
-  type        = "encryption"
-  description = "Encryption policy for compliance collection"
 
-  policy = jsonencode({
-    Rules = [
-      {
-        ResourceType = "collection"
-        Resource     = ["collection/${var.opensearch_collection_name}"]
-      }
-    ],
-    AWSOwnedKey = true
-  })
-}
 
-# OpenSearch Serverless network policy
-resource "aws_opensearchserverless_security_policy" "compliance_network" {
-  name        = "compliance-net-policy"
-  type        = "network"
-  description = "Network policy for compliance collection"
 
-  policy = jsonencode([
-    {
-      Description = "Public access for dashboard and API"
-      Rules = [
-        {
-          ResourceType = "collection"
-          Resource     = ["collection/${var.opensearch_collection_name}"]
-        },
-        {
-          ResourceType = "dashboard"
-          Resource     = ["collection/${var.opensearch_collection_name}"]
-        }
-      ]
-      AllowFromPublic = true
-    }
-  ])
-}
-
-# OpenSearch Serverless collection
-resource "aws_opensearchserverless_collection" "compliance_vectors" {
-  name = var.opensearch_collection_name
-  type = "VECTORSEARCH"
-  
-  depends_on = [
-    aws_opensearchserverless_security_policy.compliance_encryption,
-    aws_opensearchserverless_security_policy.compliance_network
-  ]
-  
-  tags = var.tags
-}
-
-# Data access policy for OpenSearch
-# Corrected OpenSearch Access Policy
-resource "aws_opensearchserverless_access_policy" "compliance_data_access" {
-  name = "${var.opensearch_collection_name}-access"
-  type = "data"
-  
-  policy = jsonencode([
-    {
-      Rules = [
-        {
-          Resource = [
-            "collection/${var.opensearch_collection_name}"
-          ]
-          Permission = [
-            "aoss:CreateCollectionItems",
-            "aoss:DeleteCollectionItems",
-            "aoss:UpdateCollectionItems",
-            "aoss:DescribeCollectionItems"
-          ]
-          ResourceType = "collection"
-        },
-        {
-          Resource = [
-            "index/${var.opensearch_collection_name}/*"
-          ]
-          Permission = [
-            "aoss:CreateIndex",
-            "aoss:DeleteIndex",
-            "aoss:UpdateIndex",
-            "aoss:DescribeIndex",
-            "aoss:ReadDocument",
-            "aoss:WriteDocument"
-          ]
-          ResourceType = "index"
-        }
-      ]
-      Principal = [
-        "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/aws-service-role/bedrock.amazonaws.com/AWSServiceRoleForAmazonBedrock",
-        data.aws_caller_identity.current.arn,
-        aws_iam_role.bedrock_kb.arn  # <--- THIS IS THE CRITICAL FIX
-      ]
-    }
-  ])
-}
-
-# ADDED: OpenSearch Index Resource (Fix for Bedrock KB error)
-# Corrected Index Resource with FAISS Engine
-resource "opensearch_index" "compliance_index" {
-  name               = "compliance-policy-index"
-  number_of_shards   = "2"
-  number_of_replicas = "0"
-  index_knn          = true
-  index_knn_algo_param_ef_search = "512"
-  
-  mappings = <<-EOF
-    {
-      "properties": {
-        "bedrock-knowledge-base-default-vector": {
-          "type": "knn_vector",
-          "dimension": 1536,
-          "method": {
-            "name": "hnsw",
-            "engine": "faiss",        
-            "space_type": "cosinesimil", 
-            "parameters": {
-              "ef_construction": 512,
-              "m": 16
-            }
-          }
-        },
-        "AMAZON_BEDROCK_METADATA": {
-          "type": "text",
-          "index": false
-        },
-        "AMAZON_BEDROCK_TEXT_CHUNK": {
-          "type": "text",
-          "index": true
-        }
-      }
-    }
-  EOF
-  
-  force_destroy = true
-  
-  depends_on = [
-    aws_opensearchserverless_collection.compliance_vectors,
-    aws_opensearchserverless_access_policy.compliance_data_access,
-    aws_opensearchserverless_security_policy.compliance_encryption,
-    aws_opensearchserverless_security_policy.compliance_network
-  ]
-}
 
 ################################################################################
 # Layer 3: AI Reasoning Core - Bedrock Knowledge Base
 ################################################################################
 
-# IAM Role for Bedrock Knowledge Base
-resource "aws_iam_role" "bedrock_kb" {
-  name = "${var.project_name}-bedrock-kb-role"
-  
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Action = "sts:AssumeRole"
-        Effect = "Allow"
-        Principal = {
-          Service = "bedrock.amazonaws.com"
-        }
-        Condition = {
-          StringEquals = {
-            "aws:SourceAccount" = data.aws_caller_identity.current.account_id
-          }
-          ArnLike = {
-            "aws:SourceArn" = "arn:aws:bedrock:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:knowledge-base/*"
-          }
-        }
-      }
-    ]
-  })
-  
-  tags = var.tags
-}
 
-# Policy for Bedrock Knowledge Base
-resource "aws_iam_role_policy" "bedrock_kb" {
-  name = "${var.project_name}-bedrock-kb-policy"
-  role = aws_iam_role.bedrock_kb.id
-  
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Action = [
-          "s3:GetObject",
-          "s3:ListBucket"
-        ]
-        Resource = [
-          aws_s3_bucket.compliance_data.arn,
-          "${aws_s3_bucket.compliance_data.arn}/inputs/policy/*"
-        ]
-      },
-      {
-        Effect = "Allow"
-        Action = [
-          "bedrock:InvokeModel"
-        ]
-        Resource = "arn:aws:bedrock:${data.aws_region.current.name}::foundation-model/${var.bedrock_embedding_model_id}"
-      },
-      {
-        Effect = "Allow"
-        Action = [
-          "aoss:APIAccessAll"
-        ]
-        Resource = aws_opensearchserverless_collection.compliance_vectors.arn
-      }
-    ]
-  })
-}
+# [NEW] Reference the Existing Working Knowledge Base
 
 # Bedrock Knowledge Base
-resource "aws_bedrockagent_knowledge_base" "compliance_policy" {
-  name     = var.knowledge_base_name
-  role_arn = aws_iam_role.bedrock_kb.arn
-  
-  knowledge_base_configuration {
-    vector_knowledge_base_configuration {
-      embedding_model_arn = "arn:aws:bedrock:${data.aws_region.current.name}::foundation-model/${var.bedrock_embedding_model_id}"
-    }
-    type = "VECTOR"
-  }
-  
-  storage_configuration {
-    type = "OPENSEARCH_SERVERLESS"
-    opensearch_serverless_configuration {
-      collection_arn    = aws_opensearchserverless_collection.compliance_vectors.arn
-      vector_index_name = "compliance-policy-index"
-      
-      # CORRECTED MAPPINGS to match opensearch_index resource
-      field_mapping {
-        vector_field   = "bedrock-knowledge-base-default-vector"
-        text_field     = "AMAZON_BEDROCK_TEXT_CHUNK"
-        metadata_field = "AMAZON_BEDROCK_METADATA"
-      }
-    }
-  }
-  
-  depends_on = [
-    opensearch_index.compliance_index,
-    aws_iam_role_policy.bedrock_kb
-  ]
-  
-  tags = var.tags
-}
 
-# Bedrock Knowledge Base Data Source
-resource "aws_bedrockagent_data_source" "compliance_policy" {
-  knowledge_base_id = aws_bedrockagent_knowledge_base.compliance_policy.id
-  name              = "compliance-policy-documents"
-  
-  data_source_configuration {
-    type = "S3"
-    s3_configuration {
-      bucket_arn = aws_s3_bucket.compliance_data.arn
-      inclusion_prefixes = [
-        "inputs/policy/"
-      ]
-    }
-  }
-  # Removed tags as requested
-}
 
 ################################################################################
 # Layer 2: Auto-DDL Ingestion Layer - Lambda Function
 ################################################################################
 
-# Package Lambda function code
 data "archive_file" "log_ingestion_agent" {
   type        = "zip"
   source_dir  = "${path.module}/src/ingestion_agent"
   output_path = "${path.module}/.terraform/lambda/log_ingestion_agent.zip"
 }
 
-# LogIngestionAgent Lambda Function
 resource "aws_lambda_function" "log_ingestion_agent" {
   filename         = data.archive_file.log_ingestion_agent.output_path
   function_name    = "${var.project_name}-log-ingestion-agent"
@@ -527,12 +280,9 @@ resource "aws_lambda_function" "log_ingestion_agent" {
   handler          = "lambda_function.lambda_handler"
   source_code_hash = data.archive_file.log_ingestion_agent.output_base64sha256
   runtime          = "python3.11"
-  
-  # UPDATED: Increase limits for Excel processing
   timeout          = 600  
   memory_size      = 1024 
   
-  # UPDATED: Attach the new layer
   layers           = [aws_lambda_layer_version.pandas_layer.arn]
   
   environment {
@@ -547,7 +297,6 @@ resource "aws_lambda_function" "log_ingestion_agent" {
   tags = var.tags
 }
 
-# CloudWatch Log Group for LogIngestionAgent
 resource "aws_cloudwatch_log_group" "log_ingestion_agent" {
   name              = "/aws/lambda/${aws_lambda_function.log_ingestion_agent.function_name}"
   retention_in_days = 7
@@ -555,7 +304,6 @@ resource "aws_cloudwatch_log_group" "log_ingestion_agent" {
   tags = var.tags
 }
 
-# S3 Event Notification Permission for Lambda
 resource "aws_lambda_permission" "allow_s3_invocation" {
   statement_id  = "AllowExecutionFromS3"
   action        = "lambda:InvokeFunction"
@@ -564,7 +312,6 @@ resource "aws_lambda_permission" "allow_s3_invocation" {
   source_arn    = aws_s3_bucket.compliance_data.arn
 }
 
-# S3 Event Notification Configuration
 resource "aws_s3_bucket_notification" "log_upload_trigger" {
   bucket = aws_s3_bucket.compliance_data.id
   
@@ -581,7 +328,6 @@ resource "aws_s3_bucket_notification" "log_upload_trigger" {
 # Layer 3: AI Reasoning Core - Bedrock Agent Action Group Lambda
 ################################################################################
 
-# IAM Role for Agent Athena Executor Lambda
 resource "aws_iam_role" "agent_athena_executor" {
   name = "${var.project_name}-agent-athena-executor-role"
   
@@ -601,7 +347,6 @@ resource "aws_iam_role" "agent_athena_executor" {
   tags = var.tags
 }
 
-# Policy for Agent Athena Executor Lambda
 resource "aws_iam_role_policy" "agent_athena_executor" {
   name = "${var.project_name}-agent-athena-executor-policy"
   role = aws_iam_role.agent_athena_executor.id
@@ -625,7 +370,11 @@ resource "aws_iam_role_policy" "agent_athena_executor" {
         Action = [
           "glue:GetDatabase",
           "glue:GetTable",
-          "glue:GetTables"
+          "glue:GetTables",
+          # NEW: Required permissions for partitioned tables
+          "glue:GetPartition",
+          "glue:GetPartitions",
+          "glue:BatchGetPartition"
         ]
         Resource = [
           "arn:aws:glue:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:catalog",
@@ -638,9 +387,12 @@ resource "aws_iam_role_policy" "agent_athena_executor" {
         Action = [
           "s3:GetObject",
           "s3:PutObject",
-          "s3:ListBucket"
+          "s3:ListBucket",
+          "s3:GetBucketLocation"
         ]
         Resource = [
+          "${aws_s3_bucket.compliance_data.arn}",
+          "${aws_s3_bucket.compliance_data.arn}/*",
           "${aws_s3_bucket.compliance_data.arn}/athena-results/*",
           "${aws_s3_bucket.compliance_data.arn}/inputs/logs/*"
         ]
@@ -657,24 +409,21 @@ resource "aws_iam_role_policy" "agent_athena_executor" {
     ]
   })
 }
-
-# Package Agent Athena Executor Lambda
 data "archive_file" "agent_athena_executor" {
   type        = "zip"
   source_dir  = "${path.module}/src/agent_athena_executor"
   output_path = "${path.module}/.terraform/lambda/agent_athena_executor.zip"
 }
 
-# Agent Athena Executor Lambda Function
 resource "aws_lambda_function" "agent_athena_executor" {
   filename         = data.archive_file.agent_athena_executor.output_path
   function_name    = "${var.project_name}-agent-athena-executor"
-  role            = aws_iam_role.agent_athena_executor.arn
-  handler         = "lambda_function.lambda_handler"
+  role             = aws_iam_role.agent_athena_executor.arn
+  handler          = "lambda_function.lambda_handler"
   source_code_hash = data.archive_file.agent_athena_executor.output_base64sha256
-  runtime         = "python3.11"
-  timeout         = 120
-  memory_size     = 512
+  runtime          = "python3.11"
+  timeout          = 120
+  memory_size      = 512
   
   environment {
     variables = {
@@ -687,7 +436,6 @@ resource "aws_lambda_function" "agent_athena_executor" {
   tags = var.tags
 }
 
-# CloudWatch Log Group for Agent Athena Executor
 resource "aws_cloudwatch_log_group" "agent_athena_executor" {
   name              = "/aws/lambda/${aws_lambda_function.agent_athena_executor.function_name}"
   retention_in_days = 7
@@ -695,7 +443,6 @@ resource "aws_cloudwatch_log_group" "agent_athena_executor" {
   tags = var.tags
 }
 
-# Lambda permission for Bedrock Agent to invoke
 resource "aws_lambda_permission" "allow_bedrock_agent" {
   statement_id  = "AllowBedrockAgentInvoke"
   action        = "lambda:InvokeFunction"
@@ -708,7 +455,6 @@ resource "aws_lambda_permission" "allow_bedrock_agent" {
 # Layer 3: AI Reasoning Core - Bedrock Agent
 ################################################################################
 
-# IAM Role for Bedrock Agent
 resource "aws_iam_role" "bedrock_agent" {
   name = "${var.project_name}-bedrock-agent-role"
   
@@ -721,14 +467,6 @@ resource "aws_iam_role" "bedrock_agent" {
         Principal = {
           Service = "bedrock.amazonaws.com"
         }
-        Condition = {
-          StringEquals = {
-            "aws:SourceAccount" = data.aws_caller_identity.current.account_id
-          }
-          ArnLike = {
-            "aws:SourceArn" = "arn:aws:bedrock:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:agent/*"
-          }
-        }
       }
     ]
   })
@@ -736,7 +474,6 @@ resource "aws_iam_role" "bedrock_agent" {
   tags = var.tags
 }
 
-# Policy for Bedrock Agent
 resource "aws_iam_role_policy" "bedrock_agent" {
   name = "${var.project_name}-bedrock-agent-policy"
   role = aws_iam_role.bedrock_agent.id
@@ -747,16 +484,19 @@ resource "aws_iam_role_policy" "bedrock_agent" {
       {
         Effect = "Allow"
         Action = [
-          "bedrock:InvokeModel"
+          "bedrock:InvokeModel",
+          "bedrock:GetInferenceProfile",
+          "bedrock:ListInferenceProfiles"
         ]
-        Resource = "arn:aws:bedrock:${data.aws_region.current.name}::foundation-model/${var.bedrock_model_id}"
+        Resource = "*"
       },
       {
         Effect = "Allow"
         Action = [
-          "bedrock:Retrieve"
+          "bedrock:Retrieve",
+          "bedrock:RetrieveAndGenerate"
         ]
-        Resource = aws_bedrockagent_knowledge_base.compliance_policy.arn
+        Resource = "*"
       },
       {
         Effect = "Allow"
@@ -769,36 +509,31 @@ resource "aws_iam_role_policy" "bedrock_agent" {
   })
 }
 
-# Bedrock Agent
 resource "aws_bedrockagent_agent" "compliance_auditor" {
   agent_name              = var.bedrock_agent_name
   agent_resource_role_arn = aws_iam_role.bedrock_agent.arn
-  foundation_model        = var.bedrock_model_id
+  foundation_model        = data.aws_bedrock_inference_profile.current.inference_profile_arn
   
   instruction = <<-EOT
-You are an expert IT Compliance Auditor specializing in analyzing system logs against the Keppel Technology Standards.
+You are an expert IT Compliance Auditor for Keppel. Your task is to validate system logs against the 'Keppel Technology and Cybersecurity Standards (TECH-S01-01)'.
 
-Your responsibilities:
-1. Analyze log data from multiple sources (ServiceNow, Cato, Saviynt, Syslogs) to identify compliance violations
-2. Cross-reference log findings with specific policy sections from the Knowledge Base
-3. Provide evidence-based compliance assessments with specific log entry citations
-4. Identify patterns of non-compliance and security risks
+When analyzing logs, focus on these key controls:
+- Section 5.9 (Access Control): Flag shared accounts, dormant users, or unauthorized privilege escalation.
+- Section 5.10 (Password Mgt): Flag repeated login failures (Brute force) or account lockouts.
+- Section 8.3 (Secure Auth): Verify Multi-Factor Authentication (MFA) success/failure events.
+- Section 8.11 (Logging): Ensure logs have valid timestamps and cover critical activities.
+- Section 8.14 (Network): Flag unauthorized inbound connections or denied traffic.
 
-When analyzing a policy section:
-1. First, use the list-views tool to see what log sources are available
-2. Query the Knowledge Base to understand the specific requirements of the policy section
-3. Use the query-athena tool to search for relevant log entries that demonstrate compliance or violations
-4. For each finding, cite specific log entries with timestamps, user IDs, and relevant details
-5. Categorize findings as: COMPLIANT, NON-COMPLIANT, or REQUIRES_ATTENTION
-6. Provide a summary with risk level (HIGH, MEDIUM, LOW) for non-compliant findings
-
-Always be thorough, accurate, and cite specific evidence from both logs and policy documents.
+Always cite specific log entries (Time, User, Event) as evidence for your findings.
 EOT
   
   tags = var.tags
+  
+  depends_on = [
+    aws_iam_role_policy.bedrock_agent
+  ]
 }
 
-# Bedrock Agent Action Group for Athena Queries
 resource "aws_bedrockagent_agent_action_group" "query_logs" {
   action_group_name          = "QueryLogsActionGroup"
   agent_id                   = aws_bedrockagent_agent.compliance_auditor.agent_id
@@ -816,29 +551,36 @@ resource "aws_bedrockagent_agent_action_group" "query_logs" {
   description = "Allows the agent to query Athena views and list available log sources"
 }
 
-# Bedrock Agent Knowledge Base Association
 resource "aws_bedrockagent_agent_knowledge_base_association" "compliance_policy" {
   agent_id             = aws_bedrockagent_agent.compliance_auditor.agent_id
   agent_version        = "DRAFT"
-  knowledge_base_id    = aws_bedrockagent_knowledge_base.compliance_policy.id
+  # NEW LINE:
+  knowledge_base_id    = "BL63WWBBCS"
   description          = "Keppel Technology Standards policy documents"
   knowledge_base_state = "ENABLED"
+  
+  depends_on = [
+    aws_bedrockagent_agent_action_group.query_logs
+  ]
 }
 
-# Prepare Bedrock Agent (creates alias and version)
 resource "aws_bedrockagent_agent_alias" "compliance_auditor_prod" {
   agent_alias_name = "production"
   agent_id         = aws_bedrockagent_agent.compliance_auditor.agent_id
   description      = "Production alias for Compliance Auditor Agent"
   
   tags = var.tags
+
+  depends_on = [
+    aws_bedrockagent_agent_knowledge_base_association.compliance_policy,
+    aws_bedrockagent_agent_action_group.query_logs
+  ]
 }
 
 ################################################################################
 # Layer 4: Orchestration & Reporting - Lambda Functions
 ################################################################################
 
-# IAM Role for Policy Section Fetcher Lambda
 resource "aws_iam_role" "policy_section_fetcher" {
   name = "${var.project_name}-policy-section-fetcher-role"
   
@@ -858,7 +600,6 @@ resource "aws_iam_role" "policy_section_fetcher" {
   tags = var.tags
 }
 
-# Policy for Policy Section Fetcher Lambda
 resource "aws_iam_role_policy" "policy_section_fetcher" {
   name = "${var.project_name}-policy-section-fetcher-policy"
   role = aws_iam_role.policy_section_fetcher.id
@@ -897,23 +638,21 @@ resource "aws_iam_role_policy" "policy_section_fetcher" {
   })
 }
 
-# Package Policy Section Fetcher Lambda
 data "archive_file" "policy_section_fetcher" {
   type        = "zip"
   source_dir  = "${path.module}/src/policy_section_fetcher"
   output_path = "${path.module}/.terraform/lambda/policy_section_fetcher.zip"
 }
 
-# Policy Section Fetcher Lambda Function
 resource "aws_lambda_function" "policy_section_fetcher" {
   filename         = data.archive_file.policy_section_fetcher.output_path
   function_name    = "${var.project_name}-policy-section-fetcher"
-  role            = aws_iam_role.policy_section_fetcher.arn
-  handler         = "lambda_function.lambda_handler"
+  role             = aws_iam_role.policy_section_fetcher.arn
+  handler          = "lambda_function.lambda_handler"
   source_code_hash = data.archive_file.policy_section_fetcher.output_base64sha256
-  runtime         = "python3.11"
-  timeout         = 120
-  memory_size     = 512
+  runtime          = "python3.11"
+  timeout          = 120
+  memory_size      = 512
   
   environment {
     variables = {
@@ -926,7 +665,6 @@ resource "aws_lambda_function" "policy_section_fetcher" {
   tags = var.tags
 }
 
-# CloudWatch Log Group for Policy Section Fetcher
 resource "aws_cloudwatch_log_group" "policy_section_fetcher" {
   name              = "/aws/lambda/${aws_lambda_function.policy_section_fetcher.function_name}"
   retention_in_days = 7
@@ -934,7 +672,6 @@ resource "aws_cloudwatch_log_group" "policy_section_fetcher" {
   tags = var.tags
 }
 
-# IAM Role for Report Generator Lambda
 resource "aws_iam_role" "report_generator" {
   name = "${var.project_name}-report-generator-role"
   
@@ -954,7 +691,6 @@ resource "aws_iam_role" "report_generator" {
   tags = var.tags
 }
 
-# Policy for Report Generator Lambda
 resource "aws_iam_role_policy" "report_generator" {
   name = "${var.project_name}-report-generator-policy"
   role = aws_iam_role.report_generator.id
@@ -985,7 +721,6 @@ resource "aws_iam_role_policy" "report_generator" {
   })
 }
 
-# Lambda Layer for python-docx
 resource "aws_lambda_layer_version" "python_docx" {
   filename            = "${path.module}/.terraform/layers/python-docx.zip"
   layer_name          = "${var.project_name}-python-docx"
@@ -996,7 +731,7 @@ resource "aws_lambda_layer_version" "python_docx" {
     create_before_destroy = true
   }
 }
-# NEW: Pandas Layer for Excel Support
+
 resource "aws_lambda_layer_version" "pandas_layer" {
   filename            = "${path.module}/.terraform/layers/pandas-layer.zip"
   layer_name          = "${var.project_name}-pandas-layer"
@@ -1006,23 +741,21 @@ resource "aws_lambda_layer_version" "pandas_layer" {
   source_code_hash    = filebase64sha256("${path.module}/.terraform/layers/pandas-layer.zip")
 }
 
-# Package Report Generator Lambda
 data "archive_file" "report_generator" {
   type        = "zip"
   source_dir  = "${path.module}/src/report_generator"
   output_path = "${path.module}/.terraform/lambda/report_generator.zip"
 }
 
-# Report Generator Lambda Function
 resource "aws_lambda_function" "report_generator" {
   filename         = data.archive_file.report_generator.output_path
   function_name    = "${var.project_name}-report-generator"
-  role            = aws_iam_role.report_generator.arn
-  handler         = "lambda_function.lambda_handler"
+  role             = aws_iam_role.report_generator.arn
+  handler          = "lambda_function.lambda_handler"
   source_code_hash = data.archive_file.report_generator.output_base64sha256
-  runtime         = "python3.11"
-  timeout         = 300
-  memory_size     = 1024
+  runtime          = "python3.11"
+  timeout          = 300
+  memory_size      = 1024
   
   layers = [aws_lambda_layer_version.python_docx.arn]
   
@@ -1036,7 +769,6 @@ resource "aws_lambda_function" "report_generator" {
   tags = var.tags
 }
 
-# CloudWatch Log Group for Report Generator
 resource "aws_cloudwatch_log_group" "report_generator" {
   name              = "/aws/lambda/${aws_lambda_function.report_generator.function_name}"
   retention_in_days = 7
@@ -1044,11 +776,23 @@ resource "aws_cloudwatch_log_group" "report_generator" {
   tags = var.tags
 }
 
-################################################################################
-# Layer 4: Orchestration & Reporting - Step Functions
-################################################################################
+resource "aws_glue_crawler" "compliance_crawler" {
+  database_name = aws_glue_catalog_database.compliance_db.name
+  name          = "${var.project_name}-log-crawler"
+  role          = aws_iam_role.log_ingestion_agent.arn
 
-# IAM Role for Step Functions
+  s3_target {
+    path = "s3://${aws_s3_bucket.compliance_data.bucket}/processed/logs/"
+  }
+  
+  schema_change_policy {
+    delete_behavior = "DEPRECATE_IN_DATABASE"
+    update_behavior = "UPDATE_IN_DATABASE"
+  }
+  
+  tags = var.tags
+}
+
 resource "aws_iam_role" "step_functions" {
   name = "${var.project_name}-step-functions-role"
   
@@ -1068,7 +812,6 @@ resource "aws_iam_role" "step_functions" {
   tags = var.tags
 }
 
-# Policy for Step Functions
 resource "aws_iam_role_policy" "step_functions" {
   name = "${var.project_name}-step-functions-policy"
   role = aws_iam_role.step_functions.id
@@ -1084,7 +827,6 @@ resource "aws_iam_role_policy" "step_functions" {
         Resource = [
           aws_lambda_function.policy_section_fetcher.arn,
           aws_lambda_function.report_generator.arn,
-          # Added the Agent Invoker lambda if you added it in the previous step
           "arn:aws:lambda:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:function:${var.project_name}-agent-invoker"
         ]
       },
@@ -1113,13 +855,12 @@ resource "aws_iam_role_policy" "step_functions" {
           "logs:CreateLogStream",
           "logs:PutLogEvents"
         ]
-        # Broadened resource to fix AccessDenied error
         Resource = "*"
       }
     ]
   })
 }
-# IAM Role for Agent Invoker Lambda
+
 resource "aws_iam_role" "agent_invoker" {
   name = "${var.project_name}-agent-invoker-role"
   assume_role_policy = jsonencode({
@@ -1128,7 +869,6 @@ resource "aws_iam_role" "agent_invoker" {
   })
 }
 
-# Policy to allow Lambda to invoke Bedrock Agent
 resource "aws_iam_role_policy" "agent_invoker_policy" {
   name = "${var.project_name}-agent-invoker-policy"
   role = aws_iam_role.agent_invoker.id
@@ -1138,7 +878,9 @@ resource "aws_iam_role_policy" "agent_invoker_policy" {
       {
         Effect = "Allow"
         Action = ["bedrock:InvokeAgent"]
-        Resource = [aws_bedrockagent_agent_alias.compliance_auditor_prod.agent_alias_arn]
+        Resource = [
+					"arn:aws:bedrock:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:agent-alias/${aws_bedrockagent_agent.compliance_auditor.agent_id}/*"
+					]
       },
       {
         Effect = "Allow"
@@ -1149,7 +891,6 @@ resource "aws_iam_role_policy" "agent_invoker_policy" {
   })
 }
 
-# Simple Inline Lambda to Invoke Agent
 resource "aws_lambda_function" "agent_invoker" {
   function_name = "${var.project_name}-agent-invoker"
   role          = aws_iam_role.agent_invoker.arn
@@ -1157,12 +898,10 @@ resource "aws_lambda_function" "agent_invoker" {
   handler       = "index.lambda_handler"
   timeout       = 60
 
-  # Inline code to avoid needing another zip file
   filename      = data.archive_file.agent_invoker_zip.output_path
   source_code_hash = data.archive_file.agent_invoker_zip.output_base64sha256
 }
 
-# Create zip for inline lambda
 data "archive_file" "agent_invoker_zip" {
   type        = "zip"
   output_path = "${path.module}/.terraform/lambda/agent_invoker.zip"
@@ -1198,105 +937,106 @@ EOF
     filename = "index.py"
   }
 }
+
 # Step Functions State Machine
 resource "aws_sfn_state_machine" "compliance_workflow" {
   name     = "${var.project_name}-workflow"
   role_arn = aws_iam_role.step_functions.arn
-  
-  definition = jsonencode({
-    Comment = "AI-Driven Compliance Reporting Workflow"
-    StartAt = "FetchPolicySections"
-    States = {
-      FetchPolicySections = {
-        Type     = "Task"
-        Resource = "arn:aws:states:::lambda:invoke"
-        Parameters = {
-          FunctionName = aws_lambda_function.policy_section_fetcher.arn
-          "Payload.$"  = "$"
-        }
-        ResultPath = "$.section_result"
-        Next       = "ExtractSections"
-      }
-      ExtractSections = {
-        Type = "Pass"
-        Parameters = {
-          "policy_file.$" = "$.section_result.Payload.policy_file"
-          "sections.$"    = "$.section_result.Payload.sections"
-        }
-        Next = "AnalyzeSectionsInParallel"
-      }
-      AnalyzeSectionsInParallel = {
-        Type     = "Map"
-        ItemsPath = "$.sections"
-        MaxConcurrency = 5
-        ResultPath = "$.findings"
-        Parameters = {
-          "section.$"     = "$$.Map.Item.Value"
-          "policy_file.$" = "$.policy_file"
-          "agent_id"      = aws_bedrockagent_agent.compliance_auditor.agent_id
-          "agent_alias_id" = aws_bedrockagent_agent_alias.compliance_auditor_prod.agent_alias_id
-        }
-        Iterator = {
-          StartAt = "AnalyzeSection"
-          States = {
-            AnalyzeSection = {
-              Type     = "Task"
-              # FIX: Call the Shim Lambda instead of Bedrock directly
-              Resource = "arn:aws:states:::lambda:invoke" 
-              Parameters = {
-                FunctionName = aws_lambda_function.agent_invoker.arn
-                Payload = {
-                  "agent_id.$"       = "$.agent_id"
-                  "agent_alias_id.$" = "$.agent_alias_id"
-                  "input_text.$"     = "States.Format('Analyze compliance for policy section: {}. Query the available log views to find evidence of compliance or violations. Cross-reference with the policy requirements from the Knowledge Base. Provide specific log entries as evidence.', $.section)"
-                }
+
+  definition = <<EOF
+{
+  "Comment": "AI-Driven Compliance Reporting Workflow",
+  "StartAt": "FetchPolicySections",
+  "States": {
+    "FetchPolicySections": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${aws_lambda_function.policy_section_fetcher.arn}",
+        "Payload.$": "$"
+      },
+      "ResultPath": "$.section_result",
+      "Next": "ExtractSections"
+    },
+    "ExtractSections": {
+      "Type": "Pass",
+      "Parameters": {
+        "policy_file.$": "$.section_result.Payload.policy_file",
+        "sections.$": "$.section_result.Payload.sections"
+      },
+      "Next": "AnalyzeSectionsInParallel"
+    },
+    "AnalyzeSectionsInParallel": {
+      "Type": "Map",
+      "ItemsPath": "$.sections",
+      "MaxConcurrency": 5,
+      "ResultPath": "$.findings",
+      "Parameters": {
+        "section.$": "$$.Map.Item.Value",
+        "policy_file.$": "$.policy_file",
+        "agent_id": "${aws_bedrockagent_agent.compliance_auditor.agent_id}",
+        "agent_alias_id": "TSTALIASID"
+      },
+      "Iterator": {
+        "StartAt": "AnalyzeSection",
+        "States": {
+          "AnalyzeSection": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Parameters": {
+              "FunctionName": "${aws_lambda_function.agent_invoker.arn}",
+              "Payload": {
+                "agent_id.$": "$.agent_id",
+                "agent_alias_id.$": "$.agent_alias_id",
+                "input_text.$": "States.Format('Analyze compliance for Policy Section: {}. 1. Search the Knowledge Base for requirements. 2. Query the view \"unified_compliance_view\" for evidence. - Columns are: event_time, user_identity, event_action, resource_target, status_reason, source_system. - DO NOT use \"ILIKE\". Use \"LOWER(column) LIKE\". - DO NOT use date functions like DATE() or GROUP BY time. The event_time is a string. Just ORDER BY event_time DESC. 3. If Section 5.9 check for failed logins. 4. If Section 8.3 check for MFA bypass. 5. Cite specific log evidence.', $.section)"
               }
-              ResultPath = "$.agent_response"
-              Next       = "FormatFinding"
-            }
-            FormatFinding = {
-              Type = "Pass"
-              Parameters = {
-                "section.$"           = "$.section"
-                # Output from Lambda comes in .Payload.completion
-                "analysis.$"          = "$.agent_response.Payload.completion"
-                "compliance_status"   = "REQUIRES_REVIEW"
-                "risk_level"          = "MEDIUM"
-                "evidence"            = []
-                "recommendation"      = "Review agent analysis for detailed recommendations"
-              }
-              End = true
-            }
+            },
+            "ResultPath": "$.agent_response",
+            "Next": "FormatFinding"
+          },
+          "FormatFinding": {
+            "Type": "Pass",
+            "Parameters": {
+              "section.$": "$.section",
+              "analysis.$": "$.agent_response.Payload.completion",
+              "compliance_status": "REQUIRES_REVIEW",
+              "risk_level": "MEDIUM",
+              "evidence": [],
+              "recommendation": "Review agent analysis for detailed recommendations"
+            },
+            "End": true
           }
         }
-        Next = "GenerateReport"
-      }
-      GenerateReport = {
-        Type     = "Task"
-        Resource = "arn:aws:states:::lambda:invoke"
-        Parameters = {
-          FunctionName = aws_lambda_function.report_generator.arn
-          Payload = {
-            "policy_file.$" = "$.policy_file"
-            "findings.$"    = "$.findings"
-          }
+      },
+      "Next": "GenerateReport"
+    },
+    "GenerateReport": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${aws_lambda_function.report_generator.arn}",
+        "Payload": {
+          "policy_file.$": "$.policy_file",
+          "findings.$": "$.findings"
         }
-        ResultPath = "$.report_result"
-        Next       = "WorkflowComplete"
-      }
-      WorkflowComplete = {
-        Type = "Pass"
-        Parameters = {
-          "status"           = "SUCCESS"
-          "policy_file.$"    = "$.policy_file"
-          "sections_count.$" = "States.ArrayLength($.sections)"
-          "report_location.$" = "$.report_result.Payload.report_location"
-        }
-        End = true
-      }
+      },
+      "ResultPath": "$.report_result",
+      "Next": "WorkflowComplete"
+    },
+    "WorkflowComplete": {
+      "Type": "Pass",
+      "Parameters": {
+        "status": "SUCCESS",
+        "policy_file.$": "$.policy_file",
+        "sections_count.$": "States.ArrayLength($.sections)",
+        "report_location.$": "$.report_result.Payload.report_location"
+      },
+      "End": true
     }
-  })
-  
+  }
+}
+EOF
+
   logging_configuration {
     log_destination        = "${aws_cloudwatch_log_group.step_functions.arn}:*"
     include_execution_data = true
@@ -1305,7 +1045,8 @@ resource "aws_sfn_state_machine" "compliance_workflow" {
   tags = var.tags
 }
 
-# CloudWatch Log Group for Step Functions
+
+
 resource "aws_cloudwatch_log_group" "step_functions" {
   name              = "/aws/vendedlogs/states/${var.project_name}-workflow"
   retention_in_days = 7

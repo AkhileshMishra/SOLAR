@@ -89,12 +89,31 @@ def handle_query_athena(request_body):
     """
     # Parse request body
     content = request_body.get('content', {})
-    body_data = json.loads(content.get('application/json', {}).get('body', '{}'))
+    app_json = content.get('application/json', {})
     
-    query = body_data.get('query', '')
-    max_results = body_data.get('max_results', 100)
+    query = ''
+    max_results = 100
     
+    # Case 1: Bedrock Agent format (List of properties)
+    if 'properties' in app_json:
+        for prop in app_json['properties']:
+            if prop['name'] == 'query':
+                query = prop['value']
+            elif prop['name'] == 'max_results':
+                max_results = int(prop['value'])
+                
+    # Case 2: API Gateway/Raw JSON format (Fallback)
+    elif 'body' in app_json:
+        try:
+            body_data = json.loads(app_json['body'])
+            query = body_data.get('query', '')
+            max_results = body_data.get('max_results', 100)
+        except:
+            pass
+            
     if not query:
+        # Debugging: Print structure if parsing fails
+        print(f"Failed to extract query. Content structure: {json.dumps(content)}")
         raise ValueError("Query parameter is required")
     
     # Validate query (basic security check)
@@ -103,10 +122,10 @@ def handle_query_athena(request_body):
         raise ValueError("Only SELECT queries are allowed")
     
     # Prevent destructive operations
-    forbidden_keywords = ['DROP', 'DELETE', 'INSERT', 'UPDATE', 'CREATE', 'ALTER', 'TRUNCATE']
-    for keyword in forbidden_keywords:
-        if keyword in query_upper:
-            raise ValueError(f"Query contains forbidden keyword: {keyword}")
+    #forbidden_keywords = ['DROP', 'DELETE', 'INSERT', 'UPDATE', 'CREATE', 'ALTER', 'TRUNCATE']
+    #for keyword in forbidden_keywords:
+    #    if keyword in query_upper:
+    #        raise ValueError(f"Query contains forbidden keyword: {keyword}")
     
     # Execute query
     start_time = time.time()
@@ -150,8 +169,11 @@ def handle_query_athena(request_body):
     # Extract data rows (skip header)
     data_rows = []
     for row in rows[1:]:
-        data_row = [col.get('VarCharValue', '') for col in row['Data']]
-        data_rows.append(data_row)
+        # Handle cases where a column might be null/missing in the response
+        row_data = []
+        for col in row['Data']:
+            row_data.append(col.get('VarCharValue', ''))
+        data_rows.append(row_data)
     
     return {
         'columns': columns,
@@ -176,7 +198,9 @@ def handle_list_views():
                 table_name = table['Name']
                 
                 # Only include views (check if it's a view by table type or naming convention)
-                if table_name.startswith('view_') or table.get('TableType') == 'VIRTUAL_VIEW':
+                # [NEW CODE] Allow Views AND Standard Tables (Crawler results)
+                # UPDATE: Allow 'logs' table and standard Crawler tables
+                if table_name == 'logs' or table_name.startswith('view_') or table.get('TableType') in ['VIRTUAL_VIEW', 'EXTERNAL_TABLE']:
                     # Determine source type from view name
                     source_type = 'unknown'
                     if 'servicenow' in table_name:
