@@ -83,3 +83,23 @@ output "deployment_instructions" {
   
   EOT
 }
+
+output "cognito_user_pool_id" {
+  description = "ID of the Cognito User Pool"
+  value       = aws_cognito_user_pool.app_users.id
+}
+
+output "cognito_web_client_id" {
+  description = "ID of the Cognito Web Client"
+  value       = aws_cognito_user_pool_client.web_client.id
+}
+
+output "cognito_identity_pool_id" {
+  description = "ID of the Cognito Identity Pool"
+  value       = aws_cognito_identity_pool.main.id
+}
+
+output "region" {
+  description = "AWS Region"
+  value       = var.aws_region
+}

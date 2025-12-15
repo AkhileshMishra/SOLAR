@@ -18,7 +18,15 @@ terraform {
 data "aws_bedrock_inference_profile" "current" {
   inference_profile_id = var.bedrock_model_id
 }
+# 1. DEFINE PROVIDERS
 
+
+# Second Provider for the Identity Account
+provider "aws" {
+  alias   = "identity_account"
+  region  = var.aws_region
+  profile = "kep_app_ss"  # Matches the profile name you created in Part 1
+}
 provider "aws" {
   region = var.aws_region
   assume_role {
@@ -69,6 +77,18 @@ resource "aws_s3_bucket_public_access_block" "compliance_data" {
   restrict_public_buckets = true
 }
 
+# [NEW] Allow the React App to access S3
+resource "aws_s3_bucket_cors_configuration" "compliance_cors" {
+  bucket = aws_s3_bucket.compliance_data.id
+
+  cors_rule {
+    allowed_headers = ["*"]
+    allowed_methods = ["GET", "PUT", "POST", "HEAD"]
+    allowed_origins = ["http://localhost:3000"] # Allow your local React app
+    expose_headers  = ["ETag"]
+    max_age_seconds = 3000
+  }
+}
 # Server-side encryption
 resource "aws_s3_bucket_server_side_encryption_configuration" "compliance_data" {
   bucket = aws_s3_bucket.compliance_data.id
@@ -623,7 +643,14 @@ resource "aws_iam_role_policy" "policy_section_fetcher" {
         Action = [
           "bedrock:InvokeModel"
         ]
-        Resource = "arn:aws:bedrock:${data.aws_region.current.name}::foundation-model/${var.bedrock_model_id}"
+        Resource = [
+          # PERMANENT FIX: Use '*' for the region to allow Tokyo, Seoul, US, etc.
+          "arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-4-20250514-v1:0",
+          
+          # Keep your local region wildcard for other models just in case
+          "arn:aws:bedrock:${var.aws_region}::foundation-model/*",
+          "arn:aws:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:inference-profile/*"
+        ]
       },
       {
         Effect = "Allow"
@@ -1052,4 +1079,116 @@ resource "aws_cloudwatch_log_group" "step_functions" {
   retention_in_days = 7
   
   tags = var.tags
+}
+################################################################################
+# Layer 5: Frontend Authentication & Access Control (Cognito)
+################################################################################
+
+# 1. The User Database (Username & Password) - Created in External Account
+resource "aws_cognito_user_pool" "app_users" {
+  provider = aws.identity_account  # <--- Uses the KEP_APP_SS profile
+  
+  name = "${var.project_name}-user-pool"
+
+  password_policy {
+    minimum_length    = 8
+    require_lowercase = true
+    require_numbers   = true
+    require_symbols   = false
+    require_uppercase = true
+  }
+
+  auto_verified_attributes = ["email"]
+  tags = var.tags
+}
+
+# 2. The App Client (Connects React to Cognito) - Created in External Account
+resource "aws_cognito_user_pool_client" "web_client" {
+  provider = aws.identity_account  # <--- Uses the KEP_APP_SS profile
+  
+  name = "${var.project_name}-web-client"
+  user_pool_id = aws_cognito_user_pool.app_users.id
+  
+  generate_secret = false # Web apps cannot keep secrets safe
+  explicit_auth_flows = [
+    "ALLOW_USER_SRP_AUTH",
+    "ALLOW_REFRESH_TOKEN_AUTH"
+  ]
+}
+
+# 3. Identity Pool (Exchanges Login for AWS Permissions) - Created in Compliance Account
+resource "aws_cognito_identity_pool" "main" {
+  identity_pool_name               = replace("${var.project_name} identity pool", "-", " ")
+  allow_unauthenticated_identities = false
+
+  cognito_identity_providers {
+    client_id               = aws_cognito_user_pool_client.web_client.id
+    provider_name           = aws_cognito_user_pool.app_users.endpoint
+    server_side_token_check = false
+  }
+}
+
+# 4. IAM Role for Authenticated Users (Permissions for React App)
+resource "aws_iam_role" "authenticated_user" {
+  name = "${var.project_name}-authenticated-user-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Principal = { Federated = "cognito-identity.amazonaws.com" }
+      Action = "sts:AssumeRoleWithWebIdentity"
+      Condition = {
+        "StringEquals" = {
+          "cognito-identity.amazonaws.com:aud" = aws_cognito_identity_pool.main.id
+        }
+        "ForAnyValue:StringLike" = {
+          "cognito-identity.amazonaws.com:amr" = "authenticated"
+        }
+      }
+    }]
+  })
+}
+
+# 5. Attach Permissions to the Role
+resource "aws_iam_role_policy" "frontend_permissions" {
+  name = "${var.project_name}-frontend-policy"
+  role = aws_iam_role.authenticated_user.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      # Allow listing/reading policy files
+      {
+        Effect = "Allow"
+        Action = ["s3:ListBucket", "s3:GetObject"]
+        Resource = [
+          aws_s3_bucket.compliance_data.arn,
+          "${aws_s3_bucket.compliance_data.arn}/*"
+        ]
+      },
+      # Allow analyzing the policy (Calling the Fetcher Lambda)
+      {
+        Effect = "Allow"
+        Action = ["lambda:InvokeFunction"]
+        Resource = [aws_lambda_function.policy_section_fetcher.arn]
+      },
+      # Allow starting the Audit Workflow
+      {
+        Effect = "Allow"
+        Action = ["states:StartExecution", "states:DescribeExecution"]
+        Resource = [
+          aws_sfn_state_machine.compliance_workflow.arn,
+          "arn:aws:states:${var.aws_region}:${data.aws_caller_identity.current.account_id}:execution:${aws_sfn_state_machine.compliance_workflow.name}:*"
+        ]
+      }
+    ]
+  })
+}
+
+resource "aws_cognito_identity_pool_roles_attachment" "main" {
+  identity_pool_id = aws_cognito_identity_pool.main.id
+  roles = {
+    authenticated = aws_iam_role.authenticated_user.arn
+  }
 }
