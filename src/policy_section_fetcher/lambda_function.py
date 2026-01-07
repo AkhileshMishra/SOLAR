@@ -27,14 +27,15 @@ def lambda_handler(event, context):
         
         # 2. SEND CONTENT TO AI TO EXTRACT SECTIONS
         sections = extract_sections_with_bedrock(policy_bytes, policy_file)
-        
+        system_name = event.get('system_name', '')
         print(f"Extracted {len(sections)} policy sections: {sections}")
         
         return {
             'statusCode': 200,
             'policy_file': policy_file,
             'sections': sections,
-            'section_count': len(sections)
+            'section_count': len(sections),
+            'system_name': system_name
         }
         
     except Exception as e:

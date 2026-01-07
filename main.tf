@@ -316,7 +316,14 @@ resource "aws_lambda_function" "log_ingestion_agent" {
   
   tags = var.tags
 }
-
+resource "aws_lambda_layer_version" "pypdf_layer" {
+  filename            = "${path.module}/.terraform/layers/pypdf-layer.zip"
+  layer_name          = "${var.project_name}-pypdf-layer"
+  compatible_runtimes = ["python3.11"]
+  description         = "pypdf library for parsing SOC reports"
+  
+  source_code_hash    = filebase64sha256("${path.module}/.terraform/layers/pypdf-layer.zip")
+}
 resource "aws_cloudwatch_log_group" "log_ingestion_agent" {
   name              = "/aws/lambda/${aws_lambda_function.log_ingestion_agent.function_name}"
   retention_in_days = 7
@@ -399,7 +406,8 @@ resource "aws_iam_role_policy" "agent_athena_executor" {
         Resource = [
           "arn:aws:glue:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:catalog",
           "arn:aws:glue:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:database/${var.glue_database_name}",
-          "arn:aws:glue:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/${var.glue_database_name}/*"
+          "arn:aws:glue:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/${var.glue_database_name}/*",
+		  
         ]
       },
       {
@@ -414,7 +422,9 @@ resource "aws_iam_role_policy" "agent_athena_executor" {
           "${aws_s3_bucket.compliance_data.arn}",
           "${aws_s3_bucket.compliance_data.arn}/*",
           "${aws_s3_bucket.compliance_data.arn}/athena-results/*",
-          "${aws_s3_bucket.compliance_data.arn}/inputs/logs/*"
+          "${aws_s3_bucket.compliance_data.arn}/inputs/logs/*",
+		  # ADD THIS LINE:
+          "${aws_s3_bucket.compliance_data.arn}/inputs/SOCreports/*"
         ]
       },
       {
@@ -444,7 +454,7 @@ resource "aws_lambda_function" "agent_athena_executor" {
   runtime          = "python3.11"
   timeout          = 120
   memory_size      = 512
-  
+  layers = [aws_lambda_layer_version.pypdf_layer.arn]
   environment {
     variables = {
       GLUE_DATABASE          = var.glue_database_name
@@ -989,7 +999,8 @@ resource "aws_sfn_state_machine" "compliance_workflow" {
       "Type": "Pass",
       "Parameters": {
         "policy_file.$": "$.section_result.Payload.policy_file",
-        "sections.$": "$.section_result.Payload.sections"
+        "sections.$": "$.section_result.Payload.sections",
+        "system_name.$": "$.section_result.Payload.system_name"
       },
       "Next": "AnalyzeSectionsInParallel"
     },
@@ -1001,8 +1012,9 @@ resource "aws_sfn_state_machine" "compliance_workflow" {
       "Parameters": {
         "section.$": "$$.Map.Item.Value",
         "policy_file.$": "$.policy_file",
+        "system_name.$": "$.system_name",
         "agent_id": "${aws_bedrockagent_agent.compliance_auditor.agent_id}",
-        "agent_alias_id": "TSTALIASID"
+        "agent_alias_id": "${aws_bedrockagent_agent_alias.compliance_auditor_prod.agent_alias_id}"
       },
       "Iterator": {
         "StartAt": "AnalyzeSection",
@@ -1015,7 +1027,7 @@ resource "aws_sfn_state_machine" "compliance_workflow" {
               "Payload": {
                 "agent_id.$": "$.agent_id",
                 "agent_alias_id.$": "$.agent_alias_id",
-                "input_text.$": "States.Format('Analyze compliance for Policy Section: {}. 1. Search the Knowledge Base for requirements. 2. Query the view \"unified_compliance_view\" for evidence. - Columns are: event_time, user_identity, event_action, resource_target, status_reason, source_system. - DO NOT use \"ILIKE\". Use \"LOWER(column) LIKE\". - DO NOT use date functions like DATE() or GROUP BY time. The event_time is a string. Just ORDER BY event_time DESC. 3. If Section 5.9 check for failed logins. 4. If Section 8.3 check for MFA bypass. 5. Cite specific log evidence.', $.section)"
+                "input_text.$": "States.Format('Analyze compliance for Policy Section: {}. 1) Search the Knowledge Base for requirements. 2) If a System Name ({}) is provided, call the read_soc_report function to validate controls in the document. 3) If Logs are available, query the unified_compliance_view. 4) Cite evidence from whichever source you used.', $.section, $.system_name)"
               }
             },
             "ResultPath": "$.agent_response",
@@ -1055,7 +1067,6 @@ resource "aws_sfn_state_machine" "compliance_workflow" {
       "Parameters": {
         "status": "SUCCESS",
         "policy_file.$": "$.policy_file",
-        "sections_count.$": "States.ArrayLength($.sections)",
         "report_location.$": "$.report_result.Payload.report_location"
       },
       "End": true
@@ -1071,7 +1082,6 @@ EOF
   }
   tags = var.tags
 }
-
 
 
 resource "aws_cloudwatch_log_group" "step_functions" {

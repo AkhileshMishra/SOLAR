@@ -2,14 +2,13 @@ import React, { useState, useEffect } from 'react';
 import { fetchAuthSession } from 'aws-amplify/auth';
 import awsConfig from './aws-exports'; 
 import AWS from 'aws-sdk';
-// Explicit Service Imports
 import S3 from 'aws-sdk/clients/s3';
 import Lambda from 'aws-sdk/clients/lambda';
 import StepFunctions from 'aws-sdk/clients/stepfunctions';
 
 import { 
   Container, Typography, Box, Button, Select, MenuItem, 
-  TextField, Paper, CircularProgress, Alert, AppBar, Toolbar, Link 
+  TextField, Paper, CircularProgress, Alert, AppBar, Toolbar 
 } from '@mui/material';
 import DownloadIcon from '@mui/icons-material/Download';
 
@@ -22,13 +21,17 @@ const REGION = "ap-southeast-1";
 const Dashboard = ({ user, signOut }) => {
   const [policies, setPolicies] = useState([]);
   const [selectedPolicy, setSelectedPolicy] = useState('');
+  
+  // [NEW] System Selection State
+  const [systems, setSystems] = useState([]);
+  const [selectedSystem, setSelectedSystem] = useState('');
+
   const [prompts, setPrompts] = useState([]);
   
   // UI State
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState('');
-  const [executionArn, setExecutionArn] = useState('');
-  const [reportUrl, setReportUrl] = useState(''); // Store the final download link
+  const [reportUrl, setReportUrl] = useState(''); 
 
   useEffect(() => {
     const initAWS = async () => {
@@ -50,6 +53,7 @@ const Dashboard = ({ user, signOut }) => {
         });
         
         listPolicies();
+        listSystems(); // [NEW] Fetch systems on load
       } catch (err) {
         console.error("Error initializing AWS:", err);
         setStatus("Authentication error: " + err.message);
@@ -77,11 +81,34 @@ const Dashboard = ({ user, signOut }) => {
     }
   };
 
+  // [NEW] Function to list System Folders from S3
+  const listSystems = async () => {
+    const s3 = new S3();
+    try {
+      const data = await s3.listObjectsV2({
+        Bucket: BUCKET_NAME,
+        Prefix: 'inputs/SOCreports/',
+        Delimiter: '/' 
+      }).promise();
+      
+      const systemFolders = (data.CommonPrefixes || [])
+        .map(prefix => {
+          const parts = prefix.Prefix.split('/');
+          return parts[parts.length - 2]; 
+        });
+
+      setSystems(systemFolders);
+    } catch (err) {
+      console.error(err);
+      setStatus(`Error fetching systems: ${err.message}`);
+    }
+  };
+
   const analyzePolicy = async () => {
     if (!selectedPolicy) return;
     setLoading(true);
     setStatus('AI is analyzing policy structure...');
-    setReportUrl(''); // Reset previous report
+    setReportUrl(''); 
     
     const lambda = new Lambda();
     try {
@@ -94,13 +121,14 @@ const Dashboard = ({ user, signOut }) => {
       const payload = JSON.parse(response.Payload);
       const sections = payload.sections || [];
 
+      // [UPDATE] Prompt includes System Name context
       const initialPrompts = sections.map(sec => ({
         section: sec,
-        prompt: `Analyze compliance for Policy Section: ${sec}.\n1. Search the Knowledge Base for requirements.\n2. Query the view 'unified_compliance_view' for evidence.\n   - Columns: event_time, user_identity, event_action, resource_target, status_reason, source_system.\n   - DO NOT use 'ILIKE'. Use 'LOWER(column) LIKE'.\n   - DO NOT use date functions. ORDER BY event_time DESC.\n3. If Section 5.9 check for failed logins.\n4. If Section 8.3 check for MFA bypass.\n5. Cite specific log evidence.`
+        prompt: `Analyze compliance for Policy Section: ${sec}.\n1) Search Knowledge Base. 2) If System Name (${selectedSystem}) is provided, check SOC report. 3) Query unified_compliance_view. 4) Cite evidence.`
       }));
       
       setPrompts(initialPrompts);
-      setStatus('Policy analyzed. Please review prompts below.');
+      setStatus('Policy analyzed. Review prompts below.');
     } catch (err) {
       setStatus(`Error: ${err.message}`);
     } finally {
@@ -114,27 +142,20 @@ const Dashboard = ({ user, signOut }) => {
     setPrompts(updated);
   };
 
-  // --- POLLING LOGIC STARTS HERE ---
   const waitForCompletion = async (arn, stepfunctions) => {
     try {
         let isRunning = true;
         
         while (isRunning) {
-            // Wait 2 seconds before checking
-            await new Promise(resolve => setTimeout(resolve, 2000));
+            await new Promise(resolve => setTimeout(resolve, 3000));
             
             const statusData = await stepfunctions.describeExecution({ executionArn: arn }).promise();
             const state = statusData.status;
             
             if (state === 'SUCCEEDED') {
                 setStatus('Audit Complete! Generating download link...');
-                
-                // Parse output to find S3 Key
                 const output = JSON.parse(statusData.output);
-                // The output format depends on your Step Function. 
-                // Based on main.tf it returns: { "report_location": "s3://bucket/key" }
                 const s3Location = output.report_location;
-                
                 generatePresignedUrl(s3Location);
                 isRunning = false;
             } else if (state === 'FAILED' || state === 'TIMED_OUT' || state === 'ABORTED') {
@@ -143,7 +164,6 @@ const Dashboard = ({ user, signOut }) => {
                 isRunning = false;
             } else {
                 setStatus(`Audit in progress... Status: ${state}`);
-                // Continue loop
             }
         }
     } catch (err) {
@@ -153,22 +173,16 @@ const Dashboard = ({ user, signOut }) => {
   };
 
   const generatePresignedUrl = (s3Uri) => {
-      // s3Uri looks like: s3://bucket-name/outputs/reports/file.docx
       try {
           const s3 = new S3();
-          // Extract Key from URI
           const key = s3Uri.replace(`s3://${BUCKET_NAME}/`, '');
-          
           const url = s3.getSignedUrl('getObject', {
-              Bucket: BUCKET_NAME,
-              Key: key,
-              Expires: 3600 // Link valid for 1 hour
+              Bucket: BUCKET_NAME, Key: key, Expires: 3600 
           });
-          
           setReportUrl(url);
           setStatus('Report Generated Successfully!');
       } catch (err) {
-          setStatus('Error generating download link: ' + err.message);
+          setStatus('Error generating link: ' + err.message);
       } finally {
           setLoading(false);
       }
@@ -183,16 +197,14 @@ const Dashboard = ({ user, signOut }) => {
     try {
       const params = {
         stateMachineArn: STEP_FUNCTION_ARN,
+        // [CRITICAL UPDATE] Sending system_name to backend
         input: JSON.stringify({
           policy_file: selectedPolicy,
-          items: prompts
+          system_name: selectedSystem 
         })
       };
       
       const result = await stepfunctions.startExecution(params).promise();
-      setExecutionArn(result.executionArn);
-      
-      // Start polling loop
       waitForCompletion(result.executionArn, stepfunctions);
       
     } catch (err) {
@@ -214,65 +226,71 @@ const Dashboard = ({ user, signOut }) => {
 
       <Container maxWidth="lg" sx={{ mt: 4 }}>
         <Paper sx={{ p: 3, mb: 3 }}>
-          <Typography variant="h6">1. Select Policy</Typography>
+          <Typography variant="h6" sx={{ mb: 2 }}>Configuration</Typography>
+          
+          <Typography variant="subtitle2">1. Select Policy Document:</Typography>
           <Select 
             fullWidth 
             value={selectedPolicy} 
             onChange={(e) => setSelectedPolicy(e.target.value)}
             displayEmpty
-            sx={{ mt: 2, mb: 2 }}
+            sx={{ mb: 3 }}
           >
             <MenuItem value="" disabled>Select a PDF...</MenuItem>
             {policies.map(p => <MenuItem key={p} value={p}>{p}</MenuItem>)}
           </Select>
-          <Button variant="contained" onClick={analyzePolicy} disabled={!selectedPolicy || loading}>
+
+          <Typography variant="subtitle2">2. Select System for SOC Audit:</Typography>
+          <Select 
+            fullWidth 
+            value={selectedSystem} 
+            onChange={(e) => setSelectedSystem(e.target.value)}
+            displayEmpty
+            sx={{ mb: 3 }}
+          >
+            <MenuItem value="" disabled>Select System (e.g. CyberArk)...</MenuItem>
+            {systems.map(s => <MenuItem key={s} value={s}>{s}</MenuItem>)}
+          </Select>
+
+          <Button 
+            variant="contained" 
+            onClick={analyzePolicy} 
+            disabled={!selectedPolicy || !selectedSystem || loading}
+          >
             Analyze Structure
           </Button>
         </Paper>
 
         {prompts.length > 0 && (
           <Paper sx={{ p: 3, mb: 3 }}>
-            <Typography variant="h6">2. Review & Edit AI Prompts</Typography>
+            <Typography variant="h6">Review & Edit AI Prompts</Typography>
             <Typography variant="body2" color="textSecondary" sx={{ mb: 2 }}>
-              Customize the instructions for each section before execution.
+              Customize instructions for each section.
             </Typography>
             
             {prompts.map((item, idx) => (
               <Box key={idx} sx={{ mb: 3 }}>
                 <Typography variant="subtitle1" sx={{ fontWeight: 'bold' }}>{item.section}</Typography>
                 <TextField
-                  fullWidth
-                  multiline
-                  rows={4}
+                  fullWidth multiline rows={4}
                   value={item.prompt}
                   onChange={(e) => handlePromptChange(idx, e.target.value)}
-                  variant="outlined"
                 />
               </Box>
             ))}
             
-            {/* Action Area */}
             <Box sx={{ mt: 2 }}>
                 {!reportUrl ? (
                     <Button 
-                        variant="contained" 
-                        color="success" 
-                        size="large" 
-                        onClick={startAudit} 
-                        disabled={loading}
-                        fullWidth
+                        variant="contained" color="success" size="large" fullWidth
+                        onClick={startAudit} disabled={loading}
                     >
                         {loading ? <CircularProgress size={24} color="inherit" /> : "🚀 Generate Compliance Report"}
                     </Button>
                 ) : (
                     <Button 
-                        variant="contained" 
-                        color="primary" 
-                        size="large" 
-                        href={reportUrl} 
-                        target="_blank"
-                        startIcon={<DownloadIcon />}
-                        fullWidth
+                        variant="contained" color="primary" size="large" fullWidth
+                        href={reportUrl} target="_blank" startIcon={<DownloadIcon />}
                     >
                         Download Report
                     </Button>
