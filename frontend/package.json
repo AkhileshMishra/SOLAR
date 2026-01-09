@@ -13,7 +13,8 @@
     "@emotion/react": "^11.11.0",
     "@emotion/styled": "^11.11.0",
     "@mui/icons-material": "^5.14.0",
-    "aws-sdk": "^2.1400.0"
+    "aws-sdk": "^2.1400.0",
+    "typescript": "^4.9.5"
   },
   "scripts": {
     "start": "react-scripts start",
