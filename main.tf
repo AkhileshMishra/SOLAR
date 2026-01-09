@@ -21,11 +21,15 @@ data "aws_bedrock_inference_profile" "current" {
 # 1. DEFINE PROVIDERS
 
 
-# Second Provider for the Identity Account
+# Second Provider for the Identity Account (Shared Services - KEP_APP_SS)
 provider "aws" {
-  alias   = "identity_account"
-  region  = var.aws_region
-  profile = "kep_app_ss"  # Matches the profile name you created in Part 1
+  alias  = "identity_account"
+  region = var.aws_region
+
+  assume_role {
+    role_arn     = "arn:aws:iam::304838292196:role/CrossAccountCognitoRole"
+    session_name = "TerraformCognitoSession"
+  }
 }
 provider "aws" {
   region = var.aws_region
