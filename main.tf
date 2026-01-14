@@ -281,10 +281,209 @@ resource "aws_iam_role_policy" "log_ingestion_agent" {
 # Layer 3: AI Reasoning Core - Bedrock Knowledge Base
 ################################################################################
 
+# OpenSearch Serverless Collection for Vector Store
+resource "aws_opensearchserverless_security_policy" "encryption" {
+  name        = "${var.project_name}-encryption"
+  type        = "encryption"
+  description = "Encryption policy for compliance KB collection"
+  policy = jsonencode({
+    Rules = [
+      {
+        Resource     = ["collection/${var.opensearch_collection_name}"]
+        ResourceType = "collection"
+      }
+    ]
+    AWSOwnedKey = true
+  })
+}
 
-# [NEW] Reference the Existing Working Knowledge Base
+resource "aws_opensearchserverless_security_policy" "network" {
+  name        = "${var.project_name}-network"
+  type        = "network"
+  description = "Network policy for compliance KB collection"
+  policy = jsonencode([
+    {
+      Rules = [
+        {
+          Resource     = ["collection/${var.opensearch_collection_name}"]
+          ResourceType = "collection"
+        }
+      ]
+      AllowFromPublic = true
+    }
+  ])
+}
+
+resource "aws_opensearchserverless_access_policy" "data" {
+  name        = "${var.project_name}-data-access"
+  type        = "data"
+  description = "Data access policy for Bedrock Knowledge Base"
+  policy = jsonencode([
+    {
+      Rules = [
+        {
+          Resource     = ["collection/${var.opensearch_collection_name}"]
+          ResourceType = "collection"
+          Permission   = [
+            "aoss:CreateCollectionItems",
+            "aoss:DeleteCollectionItems",
+            "aoss:UpdateCollectionItems",
+            "aoss:DescribeCollectionItems"
+          ]
+        },
+        {
+          Resource     = ["index/${var.opensearch_collection_name}/*"]
+          ResourceType = "index"
+          Permission   = [
+            "aoss:CreateIndex",
+            "aoss:DeleteIndex",
+            "aoss:UpdateIndex",
+            "aoss:DescribeIndex",
+            "aoss:ReadDocument",
+            "aoss:WriteDocument"
+          ]
+        }
+      ]
+      Principal = [
+        aws_iam_role.bedrock_kb_role.arn,
+        "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/KAIZERODeploymentServer"
+      ]
+    }
+  ])
+}
+
+resource "aws_opensearchserverless_collection" "kb_collection" {
+  name        = var.opensearch_collection_name
+  type        = "VECTORSEARCH"
+  description = "Vector store for compliance policy Knowledge Base"
+
+  depends_on = [
+    aws_opensearchserverless_security_policy.encryption,
+    aws_opensearchserverless_security_policy.network,
+    aws_opensearchserverless_access_policy.data
+  ]
+
+  tags = var.tags
+}
+
+# IAM Role for Bedrock Knowledge Base
+resource "aws_iam_role" "bedrock_kb_role" {
+  name = "${var.project_name}-bedrock-kb-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "bedrock.amazonaws.com"
+        }
+        Condition = {
+          StringEquals = {
+            "aws:SourceAccount" = data.aws_caller_identity.current.account_id
+          }
+          ArnLike = {
+            "aws:SourceArn" = "arn:aws:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:knowledge-base/*"
+          }
+        }
+      }
+    ]
+  })
+
+  tags = var.tags
+}
+
+resource "aws_iam_role_policy" "bedrock_kb_policy" {
+  name = "${var.project_name}-bedrock-kb-policy"
+  role = aws_iam_role.bedrock_kb_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "bedrock:InvokeModel"
+        ]
+        Resource = [
+          "arn:aws:bedrock:${var.aws_region}::foundation-model/${var.bedrock_embedding_model_id}",
+          "arn:aws:bedrock:*::foundation-model/*"
+        ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:ListBucket"
+        ]
+        Resource = [
+          aws_s3_bucket.compliance_data.arn,
+          "${aws_s3_bucket.compliance_data.arn}/inputs/policy/*"
+        ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "aoss:APIAccessAll"
+        ]
+        Resource = [
+          "arn:aws:aoss:${var.aws_region}:${data.aws_caller_identity.current.account_id}:collection/*"
+        ]
+      }
+    ]
+  })
+}
 
 # Bedrock Knowledge Base
+resource "aws_bedrockagent_knowledge_base" "compliance_kb" {
+  name        = var.knowledge_base_name
+  description = "Knowledge Base for Keppel Technology and Cybersecurity Standards compliance policies"
+  role_arn    = aws_iam_role.bedrock_kb_role.arn
+
+  knowledge_base_configuration {
+    type = "VECTOR"
+    vector_knowledge_base_configuration {
+      embedding_model_arn = "arn:aws:bedrock:${var.aws_region}::foundation-model/${var.bedrock_embedding_model_id}"
+    }
+  }
+
+  storage_configuration {
+    type = "OPENSEARCH_SERVERLESS"
+    opensearch_serverless_configuration {
+      collection_arn    = aws_opensearchserverless_collection.kb_collection.arn
+      vector_index_name = "bedrock-knowledge-base-default-index"
+      field_mapping {
+        vector_field   = "bedrock-knowledge-base-default-vector"
+        text_field     = "AMAZON_BEDROCK_TEXT_CHUNK"
+        metadata_field = "AMAZON_BEDROCK_METADATA"
+      }
+    }
+  }
+
+  tags = var.tags
+
+  depends_on = [
+    aws_iam_role_policy.bedrock_kb_policy,
+    aws_opensearchserverless_collection.kb_collection
+  ]
+}
+
+# Knowledge Base Data Source (S3)
+resource "aws_bedrockagent_data_source" "policy_documents" {
+  name                 = "${var.project_name}-policy-docs"
+  knowledge_base_id    = aws_bedrockagent_knowledge_base.compliance_kb.id
+  description          = "Policy documents from S3 bucket"
+  data_deletion_policy = "RETAIN"
+
+  data_source_configuration {
+    type = "S3"
+    s3_configuration {
+      bucket_arn = aws_s3_bucket.compliance_data.arn
+      inclusion_prefixes = ["inputs/policy/"]
+    }
+  }
+}
 
 
 ################################################################################
@@ -598,13 +797,13 @@ resource "aws_bedrockagent_agent_action_group" "query_logs" {
 resource "aws_bedrockagent_agent_knowledge_base_association" "compliance_policy" {
   agent_id             = aws_bedrockagent_agent.compliance_auditor.agent_id
   agent_version        = "DRAFT"
-  # NEW LINE:
-  knowledge_base_id    = "BL63WWBBCS"
+  knowledge_base_id    = aws_bedrockagent_knowledge_base.compliance_kb.id
   description          = "Keppel Technology Standards policy documents"
   knowledge_base_state = "ENABLED"
   
   depends_on = [
-    aws_bedrockagent_agent_action_group.query_logs
+    aws_bedrockagent_agent_action_group.query_logs,
+    aws_bedrockagent_knowledge_base.compliance_kb
   ]
 }
 

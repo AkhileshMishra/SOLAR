@@ -22,7 +22,17 @@ output "athena_workgroup_name" {
 
 output "knowledge_base_id" {
   description = "ID of the Bedrock Knowledge Base"
-  value       = "BL63WWBBCS"
+  value       = aws_bedrockagent_knowledge_base.compliance_kb.id
+}
+
+output "knowledge_base_data_source_id" {
+  description = "ID of the Knowledge Base data source"
+  value       = aws_bedrockagent_data_source.policy_documents.data_source_id
+}
+
+output "opensearch_collection_endpoint" {
+  description = "OpenSearch Serverless collection endpoint"
+  value       = aws_opensearchserverless_collection.kb_collection.collection_endpoint
 }
 
 output "bedrock_agent_id" {
