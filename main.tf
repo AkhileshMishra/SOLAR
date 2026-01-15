@@ -14,15 +14,10 @@ terraform {
   }
 }
 
-# Import blocks for existing resources (Terraform 1.5+)
+# Import block for existing IAM role (Terraform 1.5+)
 import {
   to = aws_iam_role.bedrock_kb_role
   id = "compliance-reporting-bedrock-kb-role"
-}
-
-import {
-  to = aws_opensearchserverless_security_policy.encryption
-  id = "compliance-reporting-encryption/encryption"
 }
 
 # Fetch the full ARN of the Inference Profile
