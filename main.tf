@@ -355,7 +355,8 @@ resource "aws_opensearchserverless_access_policy" "data" {
       Principal = [
         aws_iam_role.bedrock_kb_role.arn,
         data.aws_caller_identity.current.arn,
-        "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/KAIZERODeploymentServer"
+        "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/KAIZERODeploymentServer",
+        "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/GitHubActions-SOLAR-Deploy"
       ]
     }
   ])
