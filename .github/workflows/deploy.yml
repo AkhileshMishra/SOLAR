@@ -14,10 +14,11 @@ on:
         options:
           - deploy
           - force-unlock
-      lock_id:db7907dd-3947-805c-135a-b34bea9f22a7
+      lock_id:
         description: 'Terraform lock ID (required for force-unlock)'
         required: false
-        default: ''
+        default: 'db7907dd-3947-805c-135a-b34bea9f22a7'
+
 
 env:
   AWS_REGION: ap-southeast-1
