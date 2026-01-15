@@ -289,7 +289,7 @@ resource "aws_iam_role_policy" "log_ingestion_agent" {
 
 # OpenSearch Serverless Collection for Vector Store
 resource "aws_opensearchserverless_security_policy" "encryption" {
-  name        = "${var.project_name}-encryption"
+  name        = "${var.project_name}-enc-15Jan"
   type        = "encryption"
   description = "Encryption policy for compliance KB collection"
   policy = jsonencode({
@@ -308,7 +308,7 @@ resource "aws_opensearchserverless_security_policy" "encryption" {
 }
 
 resource "aws_opensearchserverless_security_policy" "network" {
-  name        = "${var.project_name}-network"
+  name        = "${var.project_name}-net-15Jan"
   type        = "network"
   description = "Network policy for compliance KB collection"
   policy = jsonencode([
@@ -325,7 +325,7 @@ resource "aws_opensearchserverless_security_policy" "network" {
 }
 
 resource "aws_opensearchserverless_access_policy" "data" {
-  name        = "${var.project_name}-data-access"
+  name        = "${var.project_name}-data-15Jan"
   type        = "data"
   description = "Data access policy for Bedrock Knowledge Base"
   policy = jsonencode([
