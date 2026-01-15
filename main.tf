@@ -354,6 +354,7 @@ resource "aws_opensearchserverless_access_policy" "data" {
       ]
       Principal = [
         aws_iam_role.bedrock_kb_role.arn,
+        data.aws_caller_identity.current.arn,
         "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/KAIZERODeploymentServer"
       ]
     }
@@ -379,21 +380,27 @@ resource "aws_opensearchserverless_collection" "kb_collection" {
 resource "null_resource" "create_opensearch_index" {
   triggers = {
     collection_endpoint = aws_opensearchserverless_collection.kb_collection.collection_endpoint
+    # Re-run if the caller identity changes (to ensure policy is updated)
+    caller_arn = data.aws_caller_identity.current.arn
   }
 
   provisioner "local-exec" {
     command = <<-EOT
       # Wait for collection and access policy to be fully active
-      echo "Waiting 120 seconds for OpenSearch collection and access policies to propagate..."
-      sleep 120
+      echo "Waiting 60 seconds for OpenSearch collection and access policies to propagate..."
+      sleep 60
       
       # Install required Python packages
       pip3 install boto3 requests requests-aws4auth --quiet
       
+      # Set environment variables for the Python script
+      export AWS_DEFAULT_REGION="${var.aws_region}"
+      export OPENSEARCH_ENDPOINT="${aws_opensearchserverless_collection.kb_collection.collection_endpoint}"
+      
       # Create the index using Python with AWS SigV4 authentication and retry logic
       python3 << 'PYTHON_SCRIPT'
 import boto3
-import json
+import os
 import requests
 import time
 from requests_aws4auth import AWS4Auth
@@ -401,8 +408,14 @@ from requests_aws4auth import AWS4Auth
 # Get AWS credentials from environment
 session = boto3.Session()
 credentials = session.get_credentials()
-region = '${var.aws_region}'
+region = os.environ.get('AWS_DEFAULT_REGION', 'ap-southeast-1')
 service = 'aoss'
+
+# Print the identity being used for debugging
+sts = boto3.client('sts')
+caller_identity = sts.get_caller_identity()
+print(f"Running as: {caller_identity['Arn']}")
+print(f"Account: {caller_identity['Account']}")
 
 awsauth = AWS4Auth(
     credentials.access_key,
@@ -413,7 +426,7 @@ awsauth = AWS4Auth(
 )
 
 # OpenSearch endpoint
-endpoint = '${aws_opensearchserverless_collection.kb_collection.collection_endpoint}'
+endpoint = os.environ.get('OPENSEARCH_ENDPOINT', '${aws_opensearchserverless_collection.kb_collection.collection_endpoint}')
 index_name = 'bedrock-knowledge-base-default-index'
 url = f'{endpoint}/{index_name}'
 
