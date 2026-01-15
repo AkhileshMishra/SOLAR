@@ -164,19 +164,65 @@ jobs:
             -backend-config="encrypt=true"
 
       # ============================================
-      # 10. Terraform Plan
+      # 10. Cleanup Conflicting OpenSearch Resources
+      # ============================================
+      - name: Cleanup Conflicting OpenSearch Resources
+        run: |
+          echo "Checking for existing OpenSearch Serverless resources that may conflict..."
+          
+          # Delete encryption policy if exists
+          if aws opensearchserverless get-security-policy --name compliance-reporting-encryption --type encryption 2>/dev/null; then
+            echo "Deleting existing encryption policy..."
+            aws opensearchserverless delete-security-policy --name compliance-reporting-encryption --type encryption
+            echo "Encryption policy deleted"
+          else
+            echo "No existing encryption policy found"
+          fi
+          
+          # Delete network policy if exists
+          if aws opensearchserverless get-security-policy --name compliance-reporting-network --type network 2>/dev/null; then
+            echo "Deleting existing network policy..."
+            aws opensearchserverless delete-security-policy --name compliance-reporting-network --type network
+            echo "Network policy deleted"
+          else
+            echo "No existing network policy found"
+          fi
+          
+          # Delete data access policy if exists
+          if aws opensearchserverless get-access-policy --name compliance-reporting-access --type data 2>/dev/null; then
+            echo "Deleting existing data access policy..."
+            aws opensearchserverless delete-access-policy --name compliance-reporting-access --type data
+            echo "Data access policy deleted"
+          else
+            echo "No existing data access policy found"
+          fi
+          
+          # Delete collection if exists (must delete after policies)
+          COLLECTION_ID=$(aws opensearchserverless list-collections --query "collectionSummaries[?name=='compliance-policy-vectors'].id" --output text 2>/dev/null)
+          if [ -n "$COLLECTION_ID" ] && [ "$COLLECTION_ID" != "None" ]; then
+            echo "Deleting existing collection: $COLLECTION_ID..."
+            aws opensearchserverless delete-collection --id "$COLLECTION_ID"
+            echo "Waiting for collection deletion..."
+            sleep 30
+            echo "Collection deleted"
+          else
+            echo "No existing collection found"
+          fi
+
+      # ============================================
+      # 11. Terraform Plan
       # ============================================
       - name: Terraform Plan
         run: terraform plan -out=tfplan
 
       # ============================================
-      # 11. Terraform Apply
+      # 12. Terraform Apply
       # ============================================
       - name: Terraform Apply
         run: terraform apply -auto-approve tfplan
 
       # ============================================
-      # 12. Get Terraform Outputs
+      # 13. Get Terraform Outputs
       # ============================================
       - name: Get Terraform Outputs
         id: tf_outputs
@@ -190,7 +236,7 @@ jobs:
           echo "CLOUDFRONT_URL=${CLOUDFRONT_URL}" >> $GITHUB_OUTPUT
 
       # ============================================
-      # 13. Deploy Frontend to S3
+      # 14. Deploy Frontend to S3
       # ============================================
       - name: Deploy Frontend to S3
         run: |
@@ -209,7 +255,7 @@ jobs:
             --cache-control "no-cache,no-store,must-revalidate" \; 2>/dev/null || true
 
       # ============================================
-      # 14. Invalidate CloudFront Cache
+      # 15. Invalidate CloudFront Cache
       # ============================================
       - name: Invalidate CloudFront Cache
         run: |
@@ -218,7 +264,7 @@ jobs:
             --paths "/*"
 
       # ============================================
-      # 15. Deployment Summary
+      # 16. Deployment Summary
       # ============================================
       - name: Deployment Summary
         run: |
