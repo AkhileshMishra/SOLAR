@@ -10,10 +10,6 @@ terraform {
       source  = "hashicorp/archive"
       version = "~> 2.4"
     }
-    opensearch = {
-      source  = "opensearch-project/opensearch"
-      version = "~> 2.0"
-    }
   }
 }
 
@@ -48,13 +44,7 @@ provider "aws" {
   }
 }
 
-# Configure OpenSearch provider for AOSS
-provider "opensearch" {
-  url         = aws_opensearchserverless_collection.kb_collection.collection_endpoint
-  healthcheck = false
-  aws_region  = var.aws_region
-  aws_assume_role_arn = "arn:aws:iam::430118833069:role/KAIZERODeploymentServer"
-}
+
 
 
 # Get current AWS account ID
@@ -384,40 +374,102 @@ resource "aws_opensearchserverless_collection" "kb_collection" {
   tags = var.tags
 }
 
-# Create the vector index for Bedrock Knowledge Base
-resource "opensearch_index" "kb_default_index" {
-  name               = "bedrock-knowledge-base-default-index"
-  number_of_shards   = "2"
-  number_of_replicas = "0"
-  index_knn          = true
-  force_destroy      = true
-
-  mappings = <<EOF
-{
-  "properties": {
-    "bedrock-knowledge-base-default-vector": {
-      "type": "knn_vector",
-      "dimension": 1536,
-      "method": {
-        "engine": "faiss",
-        "name": "hnsw",
-        "space_type": "l2",
-        "parameters": {
-          "m": 16,
-          "ef_construction": 512
-        }
-      }
-    },
-    "AMAZON_BEDROCK_TEXT_CHUNK": {
-      "type": "text"
-    },
-    "AMAZON_BEDROCK_METADATA": {
-      "type": "text",
-      "index": false
-    }
+# Create the vector index for Bedrock Knowledge Base using null_resource
+# This avoids the circular dependency issue with the opensearch provider
+resource "null_resource" "create_opensearch_index" {
+  triggers = {
+    collection_endpoint = aws_opensearchserverless_collection.kb_collection.collection_endpoint
   }
+
+  provisioner "local-exec" {
+    command = <<-EOT
+      # Wait for collection to be fully active
+      sleep 60
+      
+      # Install required Python packages
+      pip3 install boto3 requests requests-aws4auth --quiet
+      
+      # Create the index using Python with AWS SigV4 authentication
+      python3 << 'PYTHON_SCRIPT'
+import boto3
+import json
+import requests
+from requests_aws4auth import AWS4Auth
+
+# Get AWS credentials from environment
+session = boto3.Session()
+credentials = session.get_credentials()
+region = '${var.aws_region}'
+service = 'aoss'
+
+awsauth = AWS4Auth(
+    credentials.access_key,
+    credentials.secret_key,
+    region,
+    service,
+    session_token=credentials.token
+)
+
+# OpenSearch endpoint
+endpoint = '${aws_opensearchserverless_collection.kb_collection.collection_endpoint}'
+index_name = 'bedrock-knowledge-base-default-index'
+url = f'{endpoint}/{index_name}'
+
+# Index mapping for Bedrock Knowledge Base
+mapping = {
+    "settings": {
+        "index": {
+            "number_of_shards": 2,
+            "number_of_replicas": 0,
+            "knn": True
+        }
+    },
+    "mappings": {
+        "properties": {
+            "bedrock-knowledge-base-default-vector": {
+                "type": "knn_vector",
+                "dimension": 1536,
+                "method": {
+                    "engine": "faiss",
+                    "name": "hnsw",
+                    "space_type": "l2",
+                    "parameters": {
+                        "m": 16,
+                        "ef_construction": 512
+                    }
+                }
+            },
+            "AMAZON_BEDROCK_TEXT_CHUNK": {
+                "type": "text"
+            },
+            "AMAZON_BEDROCK_METADATA": {
+                "type": "text",
+                "index": False
+            }
+        }
+    }
 }
-EOF
+
+# Check if index exists
+check_response = requests.head(url, auth=awsauth)
+if check_response.status_code == 200:
+    print(f'Index {index_name} already exists')
+else:
+    # Create the index
+    response = requests.put(
+        url,
+        auth=awsauth,
+        json=mapping,
+        headers={'Content-Type': 'application/json'}
+    )
+    if response.status_code in [200, 201]:
+        print(f'Index {index_name} created successfully')
+    else:
+        print(f'Error creating index: {response.status_code} - {response.text}')
+        exit(1)
+PYTHON_SCRIPT
+    EOT
+  }
 
   depends_on = [
     aws_opensearchserverless_collection.kb_collection,
@@ -529,7 +581,7 @@ resource "aws_bedrockagent_knowledge_base" "compliance_kb" {
   depends_on = [
     aws_iam_role_policy.bedrock_kb_policy,
     aws_opensearchserverless_collection.kb_collection,
-    opensearch_index.kb_default_index
+    null_resource.create_opensearch_index
   ]
 }
 
