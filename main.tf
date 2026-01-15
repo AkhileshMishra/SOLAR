@@ -383,17 +383,19 @@ resource "null_resource" "create_opensearch_index" {
 
   provisioner "local-exec" {
     command = <<-EOT
-      # Wait for collection to be fully active
-      sleep 60
+      # Wait for collection and access policy to be fully active
+      echo "Waiting 120 seconds for OpenSearch collection and access policies to propagate..."
+      sleep 120
       
       # Install required Python packages
       pip3 install boto3 requests requests-aws4auth --quiet
       
-      # Create the index using Python with AWS SigV4 authentication
+      # Create the index using Python with AWS SigV4 authentication and retry logic
       python3 << 'PYTHON_SCRIPT'
 import boto3
 import json
 import requests
+import time
 from requests_aws4auth import AWS4Auth
 
 # Get AWS credentials from environment
@@ -450,23 +452,39 @@ mapping = {
     }
 }
 
-# Check if index exists
-check_response = requests.head(url, auth=awsauth)
-if check_response.status_code == 200:
-    print(f'Index {index_name} already exists')
-else:
+# Retry logic for index creation
+max_retries = 5
+retry_delay = 30  # seconds
+
+for attempt in range(max_retries):
+    # Check if index exists
+    check_response = requests.head(url, auth=awsauth)
+    if check_response.status_code == 200:
+        print(f'Index {index_name} already exists')
+        exit(0)
+    
     # Create the index
+    print(f'Attempt {attempt + 1}/{max_retries}: Creating index {index_name}...')
     response = requests.put(
         url,
         auth=awsauth,
         json=mapping,
         headers={'Content-Type': 'application/json'}
     )
+    
     if response.status_code in [200, 201]:
         print(f'Index {index_name} created successfully')
+        exit(0)
+    elif response.status_code == 403 and attempt < max_retries - 1:
+        print(f'Permission denied (403). Waiting {retry_delay}s for access policy to propagate...')
+        time.sleep(retry_delay)
     else:
         print(f'Error creating index: {response.status_code} - {response.text}')
-        exit(1)
+        if attempt == max_retries - 1:
+            exit(1)
+
+print('Failed to create index after all retries')
+exit(1)
 PYTHON_SCRIPT
     EOT
   }
