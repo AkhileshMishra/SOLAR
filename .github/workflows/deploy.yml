@@ -224,7 +224,19 @@ jobs:
             -backend-config="encrypt=true"
 
       # ============================================
-      # 10. Cleanup Conflicting OpenSearch Resources
+      # 10. Cleanup Terraform State (Remove orphaned resources)
+      # ============================================
+      - name: Cleanup Terraform State
+        run: |
+          echo "Removing orphaned resources from Terraform state..."
+          # Remove the old opensearch_index resource if it exists in state
+          terraform state rm opensearch_index.kb_default_index 2>/dev/null || echo "opensearch_index.kb_default_index not in state"
+          # Remove the old collection if it exists in state but not in AWS
+          terraform state rm aws_opensearchserverless_collection.kb_collection 2>/dev/null || echo "Collection not in state or already removed"
+          echo "State cleanup complete"
+
+      # ============================================
+      # 11. Cleanup Conflicting OpenSearch Resources
       # ============================================
       - name: Cleanup Conflicting OpenSearch Resources
         run: |
@@ -270,13 +282,13 @@ jobs:
           fi
 
       # ============================================
-      # 11. Terraform Plan
+      # 12. Terraform Plan
       # ============================================
       - name: Terraform Plan
         run: terraform plan -out=tfplan
 
       # ============================================
-      # 12. Terraform Apply
+      # 13. Terraform Apply
       # ============================================
       - name: Terraform Apply
         run: terraform apply -auto-approve tfplan
