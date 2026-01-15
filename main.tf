@@ -10,7 +10,10 @@ terraform {
       source  = "hashicorp/archive"
       version = "~> 2.4"
     }
-   
+    opensearch = {
+      source  = "opensearch-project/opensearch"
+      version = "~> 2.0"
+    }
   }
 }
 
@@ -45,8 +48,13 @@ provider "aws" {
   }
 }
 
-# Configure OpenSearch provider
-# Relies on Environment Variables set in PowerShell
+# Configure OpenSearch provider for AOSS
+provider "opensearch" {
+  url         = aws_opensearchserverless_collection.kb_collection.collection_endpoint
+  healthcheck = false
+  aws_region  = var.aws_region
+  aws_assume_role_arn = "arn:aws:iam::430118833069:role/KAIZERODeploymentServer"
+}
 
 
 # Get current AWS account ID
@@ -376,6 +384,47 @@ resource "aws_opensearchserverless_collection" "kb_collection" {
   tags = var.tags
 }
 
+# Create the vector index for Bedrock Knowledge Base
+resource "opensearch_index" "kb_default_index" {
+  name               = "bedrock-knowledge-base-default-index"
+  number_of_shards   = "2"
+  number_of_replicas = "0"
+  index_knn          = true
+  force_destroy      = true
+
+  mappings = <<EOF
+{
+  "properties": {
+    "bedrock-knowledge-base-default-vector": {
+      "type": "knn_vector",
+      "dimension": 1536,
+      "method": {
+        "engine": "faiss",
+        "name": "hnsw",
+        "space_type": "l2",
+        "parameters": {
+          "m": 16,
+          "ef_construction": 512
+        }
+      }
+    },
+    "AMAZON_BEDROCK_TEXT_CHUNK": {
+      "type": "text"
+    },
+    "AMAZON_BEDROCK_METADATA": {
+      "type": "text",
+      "index": false
+    }
+  }
+}
+EOF
+
+  depends_on = [
+    aws_opensearchserverless_collection.kb_collection,
+    aws_opensearchserverless_access_policy.data
+  ]
+}
+
 # IAM Role for Bedrock Knowledge Base
 resource "aws_iam_role" "bedrock_kb_role" {
   name = "${var.project_name}-bedrock-kb-role"
@@ -479,7 +528,8 @@ resource "aws_bedrockagent_knowledge_base" "compliance_kb" {
 
   depends_on = [
     aws_iam_role_policy.bedrock_kb_policy,
-    aws_opensearchserverless_collection.kb_collection
+    aws_opensearchserverless_collection.kb_collection,
+    opensearch_index.kb_default_index
   ]
 }
 
