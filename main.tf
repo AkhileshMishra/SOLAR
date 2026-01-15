@@ -14,6 +14,17 @@ terraform {
   }
 }
 
+# Import blocks for existing resources (Terraform 1.5+)
+import {
+  to = aws_iam_role.bedrock_kb_role
+  id = "compliance-reporting-bedrock-kb-role"
+}
+
+import {
+  to = aws_opensearchserverless_security_policy.encryption
+  id = "compliance-reporting-encryption/encryption"
+}
+
 # Fetch the full ARN of the Inference Profile
 data "aws_bedrock_inference_profile" "current" {
   inference_profile_id = var.bedrock_model_id
@@ -295,6 +306,10 @@ resource "aws_opensearchserverless_security_policy" "encryption" {
     ]
     AWSOwnedKey = true
   })
+
+  lifecycle {
+    ignore_changes = [policy, description]
+  }
 }
 
 resource "aws_opensearchserverless_security_policy" "network" {
@@ -392,6 +407,10 @@ resource "aws_iam_role" "bedrock_kb_role" {
   })
 
   tags = var.tags
+
+  lifecycle {
+    ignore_changes = [assume_role_policy, tags]
+  }
 }
 
 resource "aws_iam_role_policy" "bedrock_kb_policy" {
