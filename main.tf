@@ -287,6 +287,17 @@ resource "aws_iam_role_policy" "log_ingestion_agent" {
 # Layer 3: AI Reasoning Core - Bedrock Knowledge Base
 ################################################################################
 
+# Import existing OpenSearch security policies if they exist
+import {
+  to = aws_opensearchserverless_security_policy.encryption
+  id = "compliance-reporting-encryption/encryption"
+}
+
+import {
+  to = aws_opensearchserverless_security_policy.network
+  id = "compliance-reporting-network/network"
+}
+
 # OpenSearch Serverless Collection for Vector Store
 resource "aws_opensearchserverless_security_policy" "encryption" {
   name        = "${var.project_name}-encryption"

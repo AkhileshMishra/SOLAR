@@ -164,31 +164,19 @@ jobs:
             -backend-config="encrypt=true"
 
       # ============================================
-      # 10. Import Existing OpenSearch Resources (if they exist)
-      # ============================================
-      - name: Import Existing OpenSearch Resources
-        continue-on-error: true
-        run: |
-          # Import encryption policy if it exists
-          terraform import aws_opensearchserverless_security_policy.encryption "compliance-reporting-encryption/encryption" 2>/dev/null || echo "Encryption policy already in state or doesn't exist"
-          
-          # Import network policy if it exists
-          terraform import aws_opensearchserverless_security_policy.network "compliance-reporting-network/network" 2>/dev/null || echo "Network policy already in state or doesn't exist"
-
-      # ============================================
-      # 11. Terraform Plan
+      # 10. Terraform Plan
       # ============================================
       - name: Terraform Plan
         run: terraform plan -out=tfplan
 
       # ============================================
-      # 12. Terraform Apply
+      # 11. Terraform Apply
       # ============================================
       - name: Terraform Apply
         run: terraform apply -auto-approve tfplan
 
       # ============================================
-      # 13. Get Terraform Outputs
+      # 12. Get Terraform Outputs
       # ============================================
       - name: Get Terraform Outputs
         id: tf_outputs
@@ -202,7 +190,7 @@ jobs:
           echo "CLOUDFRONT_URL=${CLOUDFRONT_URL}" >> $GITHUB_OUTPUT
 
       # ============================================
-      # 14. Deploy Frontend to S3
+      # 13. Deploy Frontend to S3
       # ============================================
       - name: Deploy Frontend to S3
         run: |
@@ -221,7 +209,7 @@ jobs:
             --cache-control "no-cache,no-store,must-revalidate" \; 2>/dev/null || true
 
       # ============================================
-      # 15. Invalidate CloudFront Cache
+      # 14. Invalidate CloudFront Cache
       # ============================================
       - name: Invalidate CloudFront Cache
         run: |
@@ -230,7 +218,7 @@ jobs:
             --paths "/*"
 
       # ============================================
-      # 16. Deployment Summary
+      # 15. Deployment Summary
       # ============================================
       - name: Deployment Summary
         run: |
