@@ -10,6 +10,10 @@ terraform {
       source  = "hashicorp/archive"
       version = "~> 2.4"
     }
+    time = {
+      source  = "hashicorp/time"
+      version = "~> 0.9"
+    }
   }
 }
 
@@ -863,19 +867,24 @@ resource "aws_iam_role_policy" "bedrock_agent" {
         Effect = "Allow"
         Action = [
           "bedrock:InvokeModel",
+          "bedrock:InvokeModelWithResponseStream",
           "bedrock:GetInferenceProfile",
-          "bedrock:ListInferenceProfiles"
+          "bedrock:ListInferenceProfiles",
+          "bedrock:GetFoundationModel",
+          "bedrock:ListFoundationModels"
         ]
         Resource = "*"
       },
       {
         Effect = "Allow"
         Action = [
-          "bedrock:InvokeModel"
+          "bedrock:InvokeModel",
+          "bedrock:InvokeModelWithResponseStream"
         ]
         Resource = [
           "arn:aws:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:inference-profile/*",
-          "arn:aws:bedrock:*::foundation-model/*"
+          "arn:aws:bedrock:*::foundation-model/*",
+          "arn:aws:bedrock:*:*:inference-profile/*"
         ]
       },
       {
@@ -895,6 +904,13 @@ resource "aws_iam_role_policy" "bedrock_agent" {
       }
     ]
   })
+}
+
+# Workaround for IAM propagation delay when using inference profiles
+# See: https://github.com/hashicorp/terraform-provider-aws/issues/42847
+resource "time_sleep" "bedrock_agent_iam_propagation" {
+  depends_on      = [aws_iam_role_policy.bedrock_agent]
+  create_duration = "30s"
 }
 
 resource "aws_bedrockagent_agent" "compliance_auditor" {
@@ -918,7 +934,8 @@ EOT
   tags = var.tags
   
   depends_on = [
-    aws_iam_role_policy.bedrock_agent
+    aws_iam_role_policy.bedrock_agent,
+    time_sleep.bedrock_agent_iam_propagation
   ]
 }
 
