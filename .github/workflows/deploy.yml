@@ -234,19 +234,60 @@ jobs:
             -backend-config="encrypt=true"
 
       # ----------------------------------------
-      # 10. Terraform Plan
+      # 10. Pre-Apply Cleanup (Handle Orphaned Resources)
+      # ----------------------------------------
+      # This step handles edge cases where resources exist in AWS but not in Terraform state
+      # (e.g., from partial deployments or manual changes)
+      - name: Pre-Apply Cleanup
+        run: |
+          echo "Checking for orphaned Bedrock resources..."
+          
+          # Find any existing ComplianceAuditorAgent
+          AGENT_ID=$(aws bedrock-agent list-agents --region ${{ env.AWS_REGION }} \
+            --query "agentSummaries[?agentName=='ComplianceAuditorAgent'].agentId" \
+            --output text 2>/dev/null || echo "")
+          
+          if [ -n "$AGENT_ID" ] && [ "$AGENT_ID" != "None" ]; then
+            echo "Found existing agent: $AGENT_ID"
+            
+            # Disassociate any existing KB associations for DRAFT version
+            KB_IDS=$(aws bedrock-agent list-agent-knowledge-bases \
+              --agent-id $AGENT_ID \
+              --agent-version DRAFT \
+              --region ${{ env.AWS_REGION }} \
+              --query "agentKnowledgeBaseSummaries[*].knowledgeBaseId" \
+              --output text 2>/dev/null || echo "")
+            
+            for KB_ID in $KB_IDS; do
+              if [ -n "$KB_ID" ] && [ "$KB_ID" != "None" ]; then
+                echo "Disassociating orphaned KB: $KB_ID from agent: $AGENT_ID"
+                aws bedrock-agent disassociate-agent-knowledge-base \
+                  --agent-id $AGENT_ID \
+                  --agent-version DRAFT \
+                  --knowledge-base-id $KB_ID \
+                  --region ${{ env.AWS_REGION }} 2>/dev/null || echo "Already disassociated or not found"
+              fi
+            done
+          else
+            echo "No existing agent found, skipping cleanup"
+          fi
+          
+          echo "✓ Pre-apply cleanup complete"
+
+      # ----------------------------------------
+      # 11. Terraform Plan
       # ----------------------------------------
       - name: Terraform Plan
         run: terraform plan -out=tfplan
 
       # ----------------------------------------
-      # 11. Terraform Apply
+      # 12. Terraform Apply
       # ----------------------------------------
       - name: Terraform Apply
         run: terraform apply -auto-approve tfplan
 
       # ----------------------------------------
-      # 12. Get Terraform Outputs
+      # 13. Get Terraform Outputs
       # ----------------------------------------
       - name: Get Terraform Outputs
         id: tf_outputs
@@ -266,7 +307,7 @@ jobs:
           echo "COGNITO_IDENTITY_POOL_ID=${COGNITO_IDENTITY_POOL_ID}" >> $GITHUB_OUTPUT
 
       # ----------------------------------------
-      # 13. Update Frontend Config with Cognito
+      # 14. Update Frontend Config with Cognito
       # ----------------------------------------
       - name: Update Frontend Config
         run: |
@@ -285,14 +326,14 @@ jobs:
           echo "✓ Updated aws-exports.js with Cognito configuration"
 
       # ----------------------------------------
-      # 14. Rebuild Frontend with Updated Config
+      # 15. Rebuild Frontend with Updated Config
       # ----------------------------------------
       - name: Rebuild Frontend
         working-directory: frontend
         run: npm run build
 
       # ----------------------------------------
-      # 15. Deploy Frontend to S3
+      # 16. Deploy Frontend to S3
       # ----------------------------------------
       - name: Deploy Frontend to S3
         run: |
@@ -311,7 +352,7 @@ jobs:
             --cache-control "no-cache,no-store,must-revalidate" \; 2>/dev/null || true
 
       # ----------------------------------------
-      # 16. Invalidate CloudFront Cache
+      # 17. Invalidate CloudFront Cache
       # ----------------------------------------
       - name: Invalidate CloudFront Cache
         run: |
@@ -320,7 +361,7 @@ jobs:
             --paths "/*"
 
       # ----------------------------------------
-      # 17. Deployment Summary
+      # 18. Deployment Summary
       # ----------------------------------------
       - name: Deployment Summary
         run: |
