@@ -1375,7 +1375,8 @@ resource "aws_sfn_state_machine" "compliance_workflow" {
       "Parameters": {
         "policy_file.$": "$.section_result.Payload.policy_file",
         "sections.$": "$.section_result.Payload.sections",
-        "system_name.$": "$.section_result.Payload.system_name"
+        "system_name.$": "$.section_result.Payload.system_name",
+        "custom_prompts.$": "$.custom_prompts"
       },
       "Next": "AnalyzeSectionsInParallel"
     },
@@ -1388,6 +1389,7 @@ resource "aws_sfn_state_machine" "compliance_workflow" {
         "section.$": "$$.Map.Item.Value",
         "policy_file.$": "$.policy_file",
         "system_name.$": "$.system_name",
+        "custom_prompts.$": "$.custom_prompts",
         "agent_id": "${aws_bedrockagent_agent.compliance_auditor.agent_id}",
         "agent_alias_id": "${aws_bedrockagent_agent_alias.compliance_auditor_prod.agent_alias_id}"
       },
@@ -1402,7 +1404,8 @@ resource "aws_sfn_state_machine" "compliance_workflow" {
               "Payload": {
                 "agent_id.$": "$.agent_id",
                 "agent_alias_id.$": "$.agent_alias_id",
-                "input_text.$": "States.Format('Analyze compliance for Policy Section: {}. 1) Search the Knowledge Base for requirements. 2) If a System Name ({}) is provided, call the read_soc_report function to validate controls in the document. 3) If Logs are available, query the unified_compliance_view. 4) Cite evidence from whichever source you used.', $.section, $.system_name)"
+                "input_text.$": "States.Format('Analyze compliance for Policy Section: {}. 1) Search the Knowledge Base for requirements. 2) If a System Name ({}) is provided, call the read_soc_report function to validate controls in the document. 3) If Logs are available, query the unified_compliance_view. 4) Cite evidence from whichever source you used.', $.section, $.system_name)",
+                "custom_prompts.$": "$.custom_prompts"
               }
             },
             "ResultPath": "$.agent_response",

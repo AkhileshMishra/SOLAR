@@ -8,9 +8,12 @@ import StepFunctions from 'aws-sdk/clients/stepfunctions';
 
 import { 
   Container, Typography, Box, Button, Select, MenuItem, 
-  TextField, Paper, CircularProgress, Alert, AppBar, Toolbar 
+  TextField, Paper, CircularProgress, Alert, AppBar, Toolbar,
+  IconButton, Card, CardContent
 } from '@mui/material';
 import DownloadIcon from '@mui/icons-material/Download';
+import AddIcon from '@mui/icons-material/Add';
+import DeleteIcon from '@mui/icons-material/Delete';
 
 // --- CONFIGURATION ---
 const BUCKET_NAME = "compliance-reporting-bucket-sg-430118833069"; 
@@ -22,16 +25,21 @@ const Dashboard = ({ user, signOut }) => {
   const [policies, setPolicies] = useState([]);
   const [selectedPolicy, setSelectedPolicy] = useState('');
   
-  // [NEW] System Selection State
+  // System Selection State
   const [systems, setSystems] = useState([]);
   const [selectedSystem, setSelectedSystem] = useState('');
 
-  const [prompts, setPrompts] = useState([]);
+  // [NEW] All available sections from analyzed policy
+  const [allSections, setAllSections] = useState([]);
+  
+  // [NEW] Selected sections with their prompts
+  const [selectedSections, setSelectedSections] = useState([]);
   
   // UI State
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState('');
-  const [reportUrl, setReportUrl] = useState(''); 
+  const [reportUrl, setReportUrl] = useState('');
+  const [policyAnalyzed, setPolicyAnalyzed] = useState(false);
 
   useEffect(() => {
     const initAWS = async () => {
@@ -53,7 +61,7 @@ const Dashboard = ({ user, signOut }) => {
         });
         
         listPolicies();
-        listSystems(); // [NEW] Fetch systems on load
+        listSystems();
       } catch (err) {
         console.error("Error initializing AWS:", err);
         setStatus("Authentication error: " + err.message);
@@ -81,7 +89,6 @@ const Dashboard = ({ user, signOut }) => {
     }
   };
 
-  // [NEW] Function to list System Folders from S3
   const listSystems = async () => {
     const s3 = new S3();
     try {
@@ -108,7 +115,9 @@ const Dashboard = ({ user, signOut }) => {
     if (!selectedPolicy) return;
     setLoading(true);
     setStatus('AI is analyzing policy structure...');
-    setReportUrl(''); 
+    setReportUrl('');
+    setPolicyAnalyzed(false);
+    setSelectedSections([]);
     
     const lambda = new Lambda();
     try {
@@ -121,14 +130,9 @@ const Dashboard = ({ user, signOut }) => {
       const payload = JSON.parse(response.Payload);
       const sections = payload.sections || [];
 
-      // [UPDATE] Prompt includes System Name context
-      const initialPrompts = sections.map(sec => ({
-        section: sec,
-        prompt: `Analyze compliance for Policy Section: ${sec}.\n1) Search Knowledge Base. 2) If System Name (${selectedSystem}) is provided, check SOC report. 3) Query unified_compliance_view. 4) Cite evidence.`
-      }));
-      
-      setPrompts(initialPrompts);
-      setStatus('Policy analyzed. Review prompts below.');
+      setAllSections(sections);
+      setPolicyAnalyzed(true);
+      setStatus(`Policy analyzed. Found ${sections.length} sections. Select sections below.`);
     } catch (err) {
       setStatus(`Error: ${err.message}`);
     } finally {
@@ -136,10 +140,45 @@ const Dashboard = ({ user, signOut }) => {
     }
   };
 
-  const handlePromptChange = (index, newValue) => {
-    const updated = [...prompts];
-    updated[index].prompt = newValue;
-    setPrompts(updated);
+  // [NEW] Add a new section selection
+  const addSection = () => {
+    const newSection = {
+      id: Date.now(),
+      section: '',
+      prompt: ''
+    };
+    setSelectedSections([...selectedSections, newSection]);
+  };
+
+  // [NEW] Remove a section selection
+  const removeSection = (id) => {
+    setSelectedSections(selectedSections.filter(s => s.id !== id));
+  };
+
+  // [NEW] Update section selection
+  const updateSection = (id, section) => {
+    const updated = selectedSections.map(s => {
+      if (s.id === id) {
+        return {
+          ...s,
+          section: section,
+          prompt: `Analyze compliance for Policy Section: ${section}.\n1) Search Knowledge Base. 2) If System Name (${selectedSystem}) is provided, check SOC report. 3) Query unified_compliance_view. 4) Cite evidence.`
+        };
+      }
+      return s;
+    });
+    setSelectedSections(updated);
+  };
+
+  // [NEW] Update prompt for a section
+  const updatePrompt = (id, prompt) => {
+    const updated = selectedSections.map(s => {
+      if (s.id === id) {
+        return { ...s, prompt };
+      }
+      return s;
+    });
+    setSelectedSections(updated);
   };
 
   const waitForCompletion = async (arn, stepfunctions) => {
@@ -189,18 +228,31 @@ const Dashboard = ({ user, signOut }) => {
   };
 
   const startAudit = async () => {
+    if (selectedSections.length === 0) {
+      setStatus('Please select at least one section');
+      return;
+    }
+
     setLoading(true);
     setReportUrl('');
     setStatus('Starting Audit Workflow...');
     
     const stepfunctions = new StepFunctions();
     try {
+      // [IMPORTANT] Build prompts array from selected sections
+      const prompts = selectedSections.map(s => ({
+        section: s.section,
+        prompt: s.prompt
+      }));
+
       const params = {
         stateMachineArn: STEP_FUNCTION_ARN,
-        // [CRITICAL UPDATE] Sending system_name to backend
         input: JSON.stringify({
           policy_file: selectedPolicy,
-          system_name: selectedSystem 
+          system_name: selectedSystem,
+          // [NEW] Pass only selected sections with their prompts
+          sections: selectedSections.map(s => s.section),
+          custom_prompts: prompts
         })
       };
       
@@ -225,14 +277,20 @@ const Dashboard = ({ user, signOut }) => {
       </AppBar>
 
       <Container maxWidth="lg" sx={{ mt: 4 }}>
+        {/* Step 1 & 2: Policy and System Selection */}
         <Paper sx={{ p: 3, mb: 3 }}>
           <Typography variant="h6" sx={{ mb: 2 }}>Configuration</Typography>
           
-          <Typography variant="subtitle2">1. Select Policy Document:</Typography>
+          <Typography variant="subtitle2" sx={{ mb: 1 }}>1. Select Policy Document:</Typography>
           <Select 
             fullWidth 
             value={selectedPolicy} 
-            onChange={(e) => setSelectedPolicy(e.target.value)}
+            onChange={(e) => {
+              setSelectedPolicy(e.target.value);
+              setPolicyAnalyzed(false);
+              setAllSections([]);
+              setSelectedSections([]);
+            }}
             displayEmpty
             sx={{ mb: 3 }}
           >
@@ -240,7 +298,7 @@ const Dashboard = ({ user, signOut }) => {
             {policies.map(p => <MenuItem key={p} value={p}>{p}</MenuItem>)}
           </Select>
 
-          <Typography variant="subtitle2">2. Select System for SOC Audit:</Typography>
+          <Typography variant="subtitle2" sx={{ mb: 1 }}>2. Select System for SOC Audit:</Typography>
           <Select 
             fullWidth 
             value={selectedSystem} 
@@ -261,44 +319,114 @@ const Dashboard = ({ user, signOut }) => {
           </Button>
         </Paper>
 
-        {prompts.length > 0 && (
+        {/* Step 3: Section Selection with Dropdown */}
+        {policyAnalyzed && (
           <Paper sx={{ p: 3, mb: 3 }}>
-            <Typography variant="h6">Review & Edit AI Prompts</Typography>
-            <Typography variant="body2" color="textSecondary" sx={{ mb: 2 }}>
-              Customize instructions for each section.
+            <Typography variant="h6" sx={{ mb: 2 }}>Select Sections to Audit</Typography>
+            <Typography variant="body2" color="textSecondary" sx={{ mb: 3 }}>
+              Choose which policy sections to analyze. You can add multiple sections.
             </Typography>
-            
-            {prompts.map((item, idx) => (
-              <Box key={idx} sx={{ mb: 3 }}>
-                <Typography variant="subtitle1" sx={{ fontWeight: 'bold' }}>{item.section}</Typography>
-                <TextField
-                  fullWidth multiline rows={4}
-                  value={item.prompt}
-                  onChange={(e) => handlePromptChange(idx, e.target.value)}
-                />
-              </Box>
+
+            {/* Section Selection Cards */}
+            {selectedSections.map((item, idx) => (
+              <Card key={item.id} sx={{ mb: 3, backgroundColor: '#f5f5f5' }}>
+                <CardContent>
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
+                    <Typography variant="subtitle1" sx={{ fontWeight: 'bold' }}>
+                      Section {idx + 1}
+                    </Typography>
+                    <IconButton
+                      size="small"
+                      onClick={() => removeSection(item.id)}
+                      color="error"
+                    >
+                      <DeleteIcon />
+                    </IconButton>
+                  </Box>
+
+                  {/* Section Dropdown */}
+                  <Typography variant="body2" sx={{ mb: 1 }}>Select Section:</Typography>
+                  <Select 
+                    fullWidth
+                    value={item.section}
+                    onChange={(e) => updateSection(item.id, e.target.value)}
+                    displayEmpty
+                    sx={{ mb: 2 }}
+                  >
+                    <MenuItem value="" disabled>Choose a section...</MenuItem>
+                    {allSections.map(sec => (
+                      <MenuItem key={sec} value={sec}>{sec}</MenuItem>
+                    ))}
+                  </Select>
+
+                  {/* Prompt Text Area */}
+                  <Typography variant="body2" sx={{ mb: 1 }}>Prompt:</Typography>
+                  <TextField
+                    fullWidth
+                    multiline
+                    rows={4}
+                    value={item.prompt}
+                    onChange={(e) => updatePrompt(item.id, e.target.value)}
+                    placeholder="Edit the prompt for this section..."
+                  />
+                </CardContent>
+              </Card>
             ))}
-            
-            <Box sx={{ mt: 2 }}>
+
+            {/* Add Section Button */}
+            <Box sx={{ display: 'flex', gap: 2, mb: 3 }}>
+              <Button
+                variant="outlined"
+                startIcon={<AddIcon />}
+                onClick={addSection}
+                disabled={selectedSections.length === 0 && allSections.length === 0}
+              >
+                Add Section
+              </Button>
+              {selectedSections.length === 0 && (
+                <Button
+                  variant="contained"
+                  startIcon={<AddIcon />}
+                  onClick={addSection}
+                >
+                  Select First Section
+                </Button>
+              )}
+            </Box>
+
+            {/* Generate Report Button */}
+            {selectedSections.length > 0 && (
+              <Box sx={{ mt: 3 }}>
                 {!reportUrl ? (
                     <Button 
-                        variant="contained" color="success" size="large" fullWidth
-                        onClick={startAudit} disabled={loading}
+                        variant="contained" 
+                        color="success" 
+                        size="large" 
+                        fullWidth
+                        onClick={startAudit} 
+                        disabled={loading || selectedSections.some(s => !s.section)}
                     >
                         {loading ? <CircularProgress size={24} color="inherit" /> : "🚀 Generate Compliance Report"}
                     </Button>
                 ) : (
                     <Button 
-                        variant="contained" color="primary" size="large" fullWidth
-                        href={reportUrl} target="_blank" startIcon={<DownloadIcon />}
+                        variant="contained" 
+                        color="primary" 
+                        size="large" 
+                        fullWidth
+                        href={reportUrl} 
+                        target="_blank" 
+                        startIcon={<DownloadIcon />}
                     >
                         Download Report
                     </Button>
                 )}
-            </Box>
+              </Box>
+            )}
           </Paper>
         )}
 
+        {/* Status Messages */}
         {status && (
           <Alert severity={status.includes("Error") || status.includes("Failed") ? "error" : "info"} sx={{ mt: 2 }}>
             {status}
