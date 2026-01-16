@@ -233,6 +233,12 @@ jobs:
           terraform state rm opensearch_index.kb_default_index 2>/dev/null || echo "opensearch_index.kb_default_index not in state"
           # Remove the old collection if it exists in state but not in AWS
           terraform state rm aws_opensearchserverless_collection.kb_collection 2>/dev/null || echo "Collection not in state or already removed"
+          # Remove orphaned Bedrock Data Source if it exists in state but not in AWS
+          terraform state rm aws_bedrockagent_data_source.policy_documents 2>/dev/null || echo "Data source not in state or already removed"
+          # Remove orphaned Bedrock Knowledge Base if it exists in state but not in AWS
+          terraform state rm aws_bedrockagent_knowledge_base.compliance_kb 2>/dev/null || echo "Knowledge base not in state or already removed"
+          # Remove orphaned Knowledge Base association if it exists in state
+          terraform state rm aws_bedrockagent_agent_knowledge_base_association.compliance_policy 2>/dev/null || echo "KB association not in state or already removed"
           echo "State cleanup complete"
 
       # ============================================
