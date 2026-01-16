@@ -428,7 +428,7 @@ awsauth = AWS4Auth(
 
 # OpenSearch endpoint
 endpoint = os.environ.get('OPENSEARCH_ENDPOINT', '${aws_opensearchserverless_collection.kb_collection.collection_endpoint}')
-index_name = 'bedrock-knowledge-base-default-index'
+index_name = 'bedrock-knowledge-base-default-index-v2'
 url = f'{endpoint}/{index_name}'
 
 # Index mapping for Bedrock Knowledge Base
@@ -444,7 +444,7 @@ mapping = {
         "properties": {
             "bedrock-knowledge-base-default-vector": {
                 "type": "knn_vector",
-                "dimension": 1536,
+                "dimension": 1024,
                 "method": {
                     "engine": "faiss",
                     "name": "hnsw",
@@ -599,7 +599,7 @@ resource "aws_bedrockagent_knowledge_base" "compliance_kb" {
     type = "OPENSEARCH_SERVERLESS"
     opensearch_serverless_configuration {
       collection_arn    = aws_opensearchserverless_collection.kb_collection.arn
-      vector_index_name = "bedrock-knowledge-base-default-index"
+      vector_index_name = "bedrock-knowledge-base-default-index-v2"
       field_mapping {
         vector_field   = "bedrock-knowledge-base-default-vector"
         text_field     = "AMAZON_BEDROCK_TEXT_CHUNK"
