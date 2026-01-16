@@ -13,34 +13,6 @@ terraform {
   }
 }
 
-# Import block for existing IAM role (Terraform 1.5+)
-import {
-  to = aws_iam_role.bedrock_kb_role
-  id = "compliance-reporting-bedrock-kb-role"
-}
-
-# Import existing OpenSearch Serverless collection
-import {
-  to = aws_opensearchserverless_collection.kb_collection
-  id = "compliance-policy-vectors"
-}
-
-# Import existing OpenSearch security policies
-import {
-  to = aws_opensearchserverless_security_policy.encryption
-  id = "compliance-reporting-enc-15jan/encryption"
-}
-
-import {
-  to = aws_opensearchserverless_security_policy.network
-  id = "compliance-reporting-net-15jan/network"
-}
-
-import {
-  to = aws_opensearchserverless_access_policy.data
-  id = "compliance-reporting-data-15jan/data"
-}
-
 # Fetch the full ARN of the Inference Profile
 data "aws_bedrock_inference_profile" "current" {
   inference_profile_id = var.bedrock_model_id

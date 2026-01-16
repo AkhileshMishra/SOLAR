@@ -224,22 +224,45 @@ jobs:
             -backend-config="encrypt=true"
 
       # ============================================
-      # 10. Cleanup Terraform State (Remove orphaned resources)
+      # 10. Import Existing Resources (if they exist in AWS but not in state)
       # ============================================
-      - name: Cleanup Terraform State
+      - name: Import Existing Resources
         run: |
-          echo "Removing orphaned resources from Terraform state..."
-          # Remove the old opensearch_index resource if it exists in state
-          terraform state rm opensearch_index.kb_default_index 2>/dev/null || echo "opensearch_index.kb_default_index not in state"
-          # Remove the old collection if it exists in state but not in AWS
-          terraform state rm aws_opensearchserverless_collection.kb_collection 2>/dev/null || echo "Collection not in state or already removed"
-          # Remove orphaned Bedrock Data Source if it exists in state but not in AWS
-          terraform state rm aws_bedrockagent_data_source.policy_documents 2>/dev/null || echo "Data source not in state or already removed"
-          # Remove orphaned Bedrock Knowledge Base if it exists in state but not in AWS
-          terraform state rm aws_bedrockagent_knowledge_base.compliance_kb 2>/dev/null || echo "Knowledge base not in state or already removed"
-          # Remove orphaned Knowledge Base association if it exists in state
-          terraform state rm aws_bedrockagent_agent_knowledge_base_association.compliance_policy 2>/dev/null || echo "KB association not in state or already removed"
-          echo "State cleanup complete"
+          echo "Checking for existing resources to import..."
+          
+          # Import OpenSearch collection if it exists in AWS
+          COLLECTION_ID=$(aws opensearchserverless list-collections --query "collectionSummaries[?name=='compliance-policy-vectors'].id" --output text 2>/dev/null || echo "")
+          if [ -n "$COLLECTION_ID" ] && [ "$COLLECTION_ID" != "None" ]; then
+            echo "Found existing OpenSearch collection: $COLLECTION_ID"
+            terraform import aws_opensearchserverless_collection.kb_collection "$COLLECTION_ID" 2>/dev/null || echo "Collection already in state or import failed"
+          fi
+          
+          # Import encryption policy if it exists
+          if aws opensearchserverless get-security-policy --name "compliance-reporting-enc-15jan" --type encryption 2>/dev/null; then
+            echo "Found existing encryption policy"
+            terraform import aws_opensearchserverless_security_policy.encryption "compliance-reporting-enc-15jan/encryption" 2>/dev/null || echo "Encryption policy already in state or import failed"
+          fi
+          
+          # Import network policy if it exists
+          if aws opensearchserverless get-security-policy --name "compliance-reporting-net-15jan" --type network 2>/dev/null; then
+            echo "Found existing network policy"
+            terraform import aws_opensearchserverless_security_policy.network "compliance-reporting-net-15jan/network" 2>/dev/null || echo "Network policy already in state or import failed"
+          fi
+          
+          # Import data access policy if it exists
+          if aws opensearchserverless get-access-policy --name "compliance-reporting-data-15jan" --type data 2>/dev/null; then
+            echo "Found existing data access policy"
+            terraform import aws_opensearchserverless_access_policy.data "compliance-reporting-data-15jan/data" 2>/dev/null || echo "Data access policy already in state or import failed"
+          fi
+          
+          # Import Bedrock Knowledge Base if it exists
+          KB_ID=$(aws bedrock-agent list-knowledge-bases --query "knowledgeBaseSummaries[?name=='CompliancePolicyKB'].knowledgeBaseId" --output text 2>/dev/null || echo "")
+          if [ -n "$KB_ID" ] && [ "$KB_ID" != "None" ]; then
+            echo "Found existing Knowledge Base: $KB_ID"
+            terraform import aws_bedrockagent_knowledge_base.compliance_kb "$KB_ID" 2>/dev/null || echo "Knowledge Base already in state or import failed"
+          fi
+          
+          echo "Import check complete"
 
       # ============================================
       # 11. Terraform Plan
@@ -302,7 +325,7 @@ jobs:
           npm run build
 
       # ============================================
-      # 15. Deploy Frontend to S3
+      # 16. Deploy Frontend to S3
       # ============================================
       - name: Deploy Frontend to S3
         run: |
@@ -321,7 +344,7 @@ jobs:
             --cache-control "no-cache,no-store,must-revalidate" \; 2>/dev/null || true
 
       # ============================================
-      # 16. Invalidate CloudFront Cache
+      # 17. Invalidate CloudFront Cache
       # ============================================
       - name: Invalidate CloudFront Cache
         run: |
@@ -330,7 +353,7 @@ jobs:
             --paths "/*"
 
       # ============================================
-      # 17. Deployment Summary
+      # 18. Deployment Summary
       # ============================================
       - name: Deployment Summary
         run: |
