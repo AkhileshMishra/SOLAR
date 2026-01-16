@@ -91,9 +91,12 @@ resource "aws_s3_bucket_cors_configuration" "compliance_cors" {
 
   cors_rule {
     allowed_headers = ["*"]
-    allowed_methods = ["GET", "PUT", "POST", "HEAD"]
-    allowed_origins = ["http://localhost:3000"] # Allow your local React app
-    expose_headers  = ["ETag"]
+    allowed_methods = ["GET", "PUT", "POST", "HEAD", "DELETE"]
+    allowed_origins = [
+      "http://localhost:3000",
+      "https://${aws_cloudfront_distribution.frontend.domain_name}"
+    ]
+    expose_headers  = ["ETag", "x-amz-meta-custom-header"]
     max_age_seconds = 3000
   }
 }
