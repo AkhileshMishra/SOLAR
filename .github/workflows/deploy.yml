@@ -17,8 +17,6 @@ on:
       lock_id:
         description: 'Terraform lock ID (required for force-unlock)'
         required: false
-        default: 'db7907dd-3947-805c-135a-b34bea9f22a7'
-
 
 env:
   AWS_REGION: ap-southeast-1
@@ -31,6 +29,9 @@ permissions:
   contents: read
 
 jobs:
+  # ============================================================================
+  # Force Unlock Job (Manual Trigger Only)
+  # ============================================================================
   force-unlock:
     name: Force Unlock Terraform State
     runs-on: ubuntu-latest
@@ -76,30 +77,39 @@ jobs:
           terraform force-unlock -force ${{ github.event.inputs.lock_id }}
           echo "✓ Terraform state unlocked successfully"
 
+  # ============================================================================
+  # Deploy Job - Standard Terraform Workflow
+  # ============================================================================
+  # IMPORTANT: This workflow NEVER modifies Terraform state directly.
+  # - NO terraform state rm commands
+  # - NO terraform import commands
+  # - State is managed purely by Terraform plan/apply
+  # - State is stored in S3 with DynamoDB locking
+  # ============================================================================
   deploy:
     name: Deploy to AWS
     runs-on: ubuntu-latest
     if: github.event_name == 'push' || github.event.inputs.action == 'deploy' || github.event.inputs.action == ''
     
     steps:
-      # ============================================
+      # ----------------------------------------
       # 1. Checkout Repository
-      # ============================================
+      # ----------------------------------------
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # ============================================
+      # ----------------------------------------
       # 2. Configure AWS Credentials via OIDC
-      # ============================================
+      # ----------------------------------------
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # ============================================
+      # ----------------------------------------
       # 3. Bootstrap Terraform Backend
-      # ============================================
+      # ----------------------------------------
       - name: Bootstrap Terraform State Backend
         id: bootstrap
         run: |
@@ -168,25 +178,25 @@ jobs:
           echo "LOCK_TABLE=${LOCK_TABLE_NAME}" >> $GITHUB_OUTPUT
           echo "ACCOUNT_ID=${ACCOUNT_ID}" >> $GITHUB_OUTPUT
 
-      # ============================================
+      # ----------------------------------------
       # 4. Setup Python for Layer Building
-      # ============================================
+      # ----------------------------------------
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      # ============================================
+      # ----------------------------------------
       # 5. Build Lambda Layers
-      # ============================================
+      # ----------------------------------------
       - name: Build Lambda Layers
         run: |
           chmod +x scripts/build_layers.sh
           ./scripts/build_layers.sh
 
-      # ============================================
+      # ----------------------------------------
       # 6. Setup Node.js for Frontend Build
-      # ============================================
+      # ----------------------------------------
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -194,27 +204,27 @@ jobs:
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
 
-      # ============================================
-      # 7. Build Frontend
-      # ============================================
+      # ----------------------------------------
+      # 7. Build Frontend (Initial Build)
+      # ----------------------------------------
       - name: Build Frontend
         working-directory: frontend
         run: |
           npm install
           npm run build
 
-      # ============================================
+      # ----------------------------------------
       # 8. Setup Terraform
-      # ============================================
+      # ----------------------------------------
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TF_VERSION }}
           terraform_wrapper: false
 
-      # ============================================
-      # 9. Terraform Init with Dynamic Backend
-      # ============================================
+      # ----------------------------------------
+      # 9. Terraform Init
+      # ----------------------------------------
       - name: Terraform Init
         run: |
           terraform init \
@@ -223,62 +233,21 @@ jobs:
             -backend-config="region=${{ env.AWS_REGION }}" \
             -backend-config="encrypt=true"
 
-      # ============================================
-      # 10. Import Existing Resources (if they exist in AWS but not in state)
-      # ============================================
-      - name: Import Existing Resources
-        run: |
-          echo "Checking for existing resources to import..."
-          
-          # Import OpenSearch collection if it exists in AWS
-          COLLECTION_ID=$(aws opensearchserverless list-collections --query "collectionSummaries[?name=='compliance-policy-vectors'].id" --output text 2>/dev/null || echo "")
-          if [ -n "$COLLECTION_ID" ] && [ "$COLLECTION_ID" != "None" ]; then
-            echo "Found existing OpenSearch collection: $COLLECTION_ID"
-            terraform import aws_opensearchserverless_collection.kb_collection "$COLLECTION_ID" 2>/dev/null || echo "Collection already in state or import failed"
-          fi
-          
-          # Import encryption policy if it exists
-          if aws opensearchserverless get-security-policy --name "compliance-reporting-enc-15jan" --type encryption 2>/dev/null; then
-            echo "Found existing encryption policy"
-            terraform import aws_opensearchserverless_security_policy.encryption "compliance-reporting-enc-15jan/encryption" 2>/dev/null || echo "Encryption policy already in state or import failed"
-          fi
-          
-          # Import network policy if it exists
-          if aws opensearchserverless get-security-policy --name "compliance-reporting-net-15jan" --type network 2>/dev/null; then
-            echo "Found existing network policy"
-            terraform import aws_opensearchserverless_security_policy.network "compliance-reporting-net-15jan/network" 2>/dev/null || echo "Network policy already in state or import failed"
-          fi
-          
-          # Import data access policy if it exists
-          if aws opensearchserverless get-access-policy --name "compliance-reporting-data-15jan" --type data 2>/dev/null; then
-            echo "Found existing data access policy"
-            terraform import aws_opensearchserverless_access_policy.data "compliance-reporting-data-15jan/data" 2>/dev/null || echo "Data access policy already in state or import failed"
-          fi
-          
-          # Import Bedrock Knowledge Base if it exists
-          KB_ID=$(aws bedrock-agent list-knowledge-bases --query "knowledgeBaseSummaries[?name=='CompliancePolicyKB'].knowledgeBaseId" --output text 2>/dev/null || echo "")
-          if [ -n "$KB_ID" ] && [ "$KB_ID" != "None" ]; then
-            echo "Found existing Knowledge Base: $KB_ID"
-            terraform import aws_bedrockagent_knowledge_base.compliance_kb "$KB_ID" 2>/dev/null || echo "Knowledge Base already in state or import failed"
-          fi
-          
-          echo "Import check complete"
-
-      # ============================================
-      # 11. Terraform Plan
-      # ============================================
+      # ----------------------------------------
+      # 10. Terraform Plan
+      # ----------------------------------------
       - name: Terraform Plan
         run: terraform plan -out=tfplan
 
-      # ============================================
-      # 12. Terraform Apply
-      # ============================================
+      # ----------------------------------------
+      # 11. Terraform Apply
+      # ----------------------------------------
       - name: Terraform Apply
         run: terraform apply -auto-approve tfplan
 
-      # ============================================
-      # 13. Get Terraform Outputs
-      # ============================================
+      # ----------------------------------------
+      # 12. Get Terraform Outputs
+      # ----------------------------------------
       - name: Get Terraform Outputs
         id: tf_outputs
         run: |
@@ -296,9 +265,9 @@ jobs:
           echo "COGNITO_WEB_CLIENT_ID=${COGNITO_WEB_CLIENT_ID}" >> $GITHUB_OUTPUT
           echo "COGNITO_IDENTITY_POOL_ID=${COGNITO_IDENTITY_POOL_ID}" >> $GITHUB_OUTPUT
 
-      # ============================================
-      # 14. Update Frontend Config with Cognito Values
-      # ============================================
+      # ----------------------------------------
+      # 13. Update Frontend Config with Cognito
+      # ----------------------------------------
       - name: Update Frontend Config
         run: |
           cat > frontend/src/aws-exports.js << EOF
@@ -313,20 +282,18 @@ jobs:
           
           export default awsConfig;
           EOF
-          echo "Updated aws-exports.js with Cognito configuration"
-          cat frontend/src/aws-exports.js
+          echo "✓ Updated aws-exports.js with Cognito configuration"
 
-      # ============================================
-      # 15. Rebuild Frontend with Updated Config
-      # ============================================
+      # ----------------------------------------
+      # 14. Rebuild Frontend with Updated Config
+      # ----------------------------------------
       - name: Rebuild Frontend
         working-directory: frontend
-        run: |
-          npm run build
+        run: npm run build
 
-      # ============================================
-      # 16. Deploy Frontend to S3
-      # ============================================
+      # ----------------------------------------
+      # 15. Deploy Frontend to S3
+      # ----------------------------------------
       - name: Deploy Frontend to S3
         run: |
           aws s3 sync frontend/build/ s3://${{ steps.tf_outputs.outputs.FRONTEND_BUCKET }}/ \
@@ -335,26 +302,26 @@ jobs:
             --exclude "index.html" \
             --exclude "*.json"
           
-          # Upload index.html and JSON files with no-cache
+          # Upload index.html with no-cache
           aws s3 cp frontend/build/index.html s3://${{ steps.tf_outputs.outputs.FRONTEND_BUCKET }}/index.html \
             --cache-control "no-cache,no-store,must-revalidate"
           
-          # Upload any JSON config files with no-cache
+          # Upload JSON config files with no-cache
           find frontend/build -name "*.json" -exec aws s3 cp {} s3://${{ steps.tf_outputs.outputs.FRONTEND_BUCKET }}/ \
             --cache-control "no-cache,no-store,must-revalidate" \; 2>/dev/null || true
 
-      # ============================================
-      # 17. Invalidate CloudFront Cache
-      # ============================================
+      # ----------------------------------------
+      # 16. Invalidate CloudFront Cache
+      # ----------------------------------------
       - name: Invalidate CloudFront Cache
         run: |
           aws cloudfront create-invalidation \
             --distribution-id ${{ steps.tf_outputs.outputs.CLOUDFRONT_ID }} \
             --paths "/*"
 
-      # ============================================
-      # 18. Deployment Summary
-      # ============================================
+      # ----------------------------------------
+      # 17. Deployment Summary
+      # ----------------------------------------
       - name: Deployment Summary
         run: |
           echo "=========================================="
@@ -366,4 +333,5 @@ jobs:
           echo "AWS Account: ${{ steps.bootstrap.outputs.ACCOUNT_ID }}"
           echo "Region: ${{ env.AWS_REGION }}"
           echo ""
+          echo "Terraform State: s3://${{ steps.bootstrap.outputs.STATE_BUCKET }}/terraform.tfstate"
           echo "=========================================="
