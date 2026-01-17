@@ -125,14 +125,18 @@ def wait_for_query_results(execution_id):
         status = athena_client.get_query_execution(QueryExecutionId=execution_id)
         state = status['QueryExecution']['Status']['State']
         if state == 'SUCCEEDED': break
-        if state in ['FAILED', 'CANCELLED']: raise Exception(f"Query Failed: {state}")
+        if state in ['FAILED', 'CANCELLED']:
+            # Return empty result instead of throwing - let agent handle gracefully
+            error_reason = status['QueryExecution']['Status'].get('StateChangeReason', 'Unknown error')
+            print(f"Query Failed: {state} - {error_reason}")
+            return {"columns": [], "rows": [], "row_count": 0, "error": f"Query failed: {error_reason}"}
         time.sleep(1)
         
     results = athena_client.get_query_results(QueryExecutionId=execution_id)
     rows = []
     for row in results['ResultSet']['Rows']:
         rows.append([d.get('VarCharValue', '') for d in row['Data']])
-    return {"columns": rows[0], "rows": rows[1:], "row_count": len(rows)-1}
+    return {"columns": rows[0] if rows else [], "rows": rows[1:], "row_count": len(rows)-1}
 
 def handle_list_views():
     tables = glue_client.get_tables(DatabaseName=GLUE_DATABASE)['TableList']
