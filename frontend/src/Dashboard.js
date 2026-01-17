@@ -47,7 +47,6 @@ const Dashboard = ({ user, signOut }) => {
   const [progressOpen, setProgressOpen] = useState(false);
   const [currentStage, setCurrentStage] = useState(0);
   const [progressMessage, setProgressMessage] = useState('');
-  const [sectionsProgress, setSectionsProgress] = useState({ completed: 0, total: 0 });
   const [workflowFailed, setWorkflowFailed] = useState(false);
 
   useEffect(() => {
@@ -140,14 +139,8 @@ const Dashboard = ({ user, signOut }) => {
     setSelectedSections(selectedSections.map(s => s.id === id ? { ...s, prompt } : s));
   };
 
-  const getStageFromState = (stateName, events) => {
-    if (stateName?.includes('AnalyzeSection') || stateName?.includes('AnalyzeSectionsInParallel')) {
-      // Count completed sections from events
-      const completedSections = events?.filter(e => 
-        e.type === 'MapIterationSucceeded' || 
-        (e.stateExitedEventDetails?.name === 'FormatFinding')
-      ).length || 0;
-      setSectionsProgress({ completed: completedSections, total: selectedSections.length });
+  const getStageFromState = (stateName) => {
+    if (stateName?.includes('AnalyzeSection') || stateName?.includes('AnalyzeSectionsInParallel') || stateName?.includes('FormatFinding')) {
       return 1;
     }
     if (stateName?.includes('GenerateReport')) return 2;
@@ -176,7 +169,7 @@ const Dashboard = ({ user, signOut }) => {
           const latestStateEntered = history.events?.find(e => e.stateEnteredEventDetails);
           const currentStateName = latestStateEntered?.stateEnteredEventDetails?.name;
           
-          const stage = getStageFromState(currentStateName, history.events);
+          const stage = getStageFromState(currentStateName);
           setCurrentStage(stage);
           setProgressMessage(currentStateName ? `Processing: ${currentStateName}` : 'Processing...');
         } catch (histErr) {
@@ -232,7 +225,6 @@ const Dashboard = ({ user, signOut }) => {
     setProgressOpen(true);
     setCurrentStage(0);
     setProgressMessage('Initializing workflow...');
-    setSectionsProgress({ completed: 0, total: selectedSections.length });
     setWorkflowFailed(false);
     setStatus('');
     
@@ -383,15 +375,11 @@ const Dashboard = ({ user, signOut }) => {
             ))}
           </Stepper>
 
-          {currentStage === 1 && sectionsProgress.total > 0 && (
+          {currentStage === 1 && (
             <Box sx={{ mb: 2 }}>
               <Typography variant="body2" sx={{ mb: 1 }}>
-                Analyzing sections: {sectionsProgress.completed} / {sectionsProgress.total}
+                Analyzing {selectedSections.length} section{selectedSections.length > 1 ? 's' : ''}...
               </Typography>
-              <LinearProgress 
-                variant="determinate" 
-                value={(sectionsProgress.completed / sectionsProgress.total) * 100} 
-              />
             </Box>
           )}
 
