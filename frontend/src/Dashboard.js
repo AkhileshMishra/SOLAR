@@ -5,25 +5,29 @@ import AWS from 'aws-sdk';
 import S3 from 'aws-sdk/clients/s3';
 import Lambda from 'aws-sdk/clients/lambda';
 import StepFunctions from 'aws-sdk/clients/stepfunctions';
+import DynamoDB from 'aws-sdk/clients/dynamodb';
 
 import { 
   Container, Typography, Box, Button, Select, MenuItem, 
   TextField, Paper, CircularProgress, Alert, AppBar, Toolbar,
-  IconButton, Card, CardContent, Modal, LinearProgress, Stepper, Step, StepLabel
+  IconButton, Card, CardContent, Modal, LinearProgress, Stepper, Step, StepLabel,
+  Tabs, Tab, Table, TableBody, TableCell, TableContainer, TableHead, TableRow
 } from '@mui/material';
 import DownloadIcon from '@mui/icons-material/Download';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorIcon from '@mui/icons-material/Error';
+import HistoryIcon from '@mui/icons-material/History';
+import AssessmentIcon from '@mui/icons-material/Assessment';
 
 // --- CONFIGURATION ---
 const BUCKET_NAME = "compliance-reporting-bucket-sg-430118833069"; 
 const FETCHER_LAMBDA = "compliance-reporting-policy-section-fetcher";
 const STEP_FUNCTION_ARN = "arn:aws:states:ap-southeast-1:430118833069:stateMachine:compliance-reporting-workflow";
+const AUDIT_HISTORY_TABLE = "compliance-reporting-audit-history";
 const REGION = "ap-southeast-1";
 
-// Progress stages mapping
 const STAGES = [
   { key: 'starting', label: 'Starting Workflow' },
   { key: 'analyzing', label: 'Analyzing Sections' },
@@ -32,6 +36,10 @@ const STAGES = [
 ];
 
 const Dashboard = ({ user, signOut }) => {
+  // Tab state
+  const [activeTab, setActiveTab] = useState(0);
+  
+  // Audit tab state
   const [policies, setPolicies] = useState([]);
   const [selectedPolicy, setSelectedPolicy] = useState('');
   const [systems, setSystems] = useState([]);
@@ -41,6 +49,7 @@ const Dashboard = ({ user, signOut }) => {
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState('');
   const [reportUrl, setReportUrl] = useState('');
+  const [reportS3Key, setReportS3Key] = useState('');
   const [policyAnalyzed, setPolicyAnalyzed] = useState(false);
 
   // Progress modal state
@@ -48,6 +57,14 @@ const Dashboard = ({ user, signOut }) => {
   const [currentStage, setCurrentStage] = useState(0);
   const [progressMessage, setProgressMessage] = useState('');
   const [workflowFailed, setWorkflowFailed] = useState(false);
+
+  // History tab state
+  const [auditHistory, setAuditHistory] = useState([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+
+  const getUserId = () => {
+    return user?.username || user?.signInDetails?.loginId || 'unknown';
+  };
 
   useEffect(() => {
     const initAWS = async () => {
@@ -72,6 +89,13 @@ const Dashboard = ({ user, signOut }) => {
     initAWS();
   }, []);
 
+  // Load history when tab changes to History
+  useEffect(() => {
+    if (activeTab === 1) {
+      loadAuditHistory();
+    }
+  }, [activeTab]);
+
   const listPolicies = async () => {
     const s3 = new S3();
     try {
@@ -92,6 +116,51 @@ const Dashboard = ({ user, signOut }) => {
     } catch (err) {
       setStatus(`Error fetching systems: ${err.message}`);
     }
+  };
+
+  const loadAuditHistory = async () => {
+    setHistoryLoading(true);
+    const dynamodb = new DynamoDB.DocumentClient();
+    try {
+      const result = await dynamodb.query({
+        TableName: AUDIT_HISTORY_TABLE,
+        KeyConditionExpression: 'user_id = :uid',
+        ExpressionAttributeValues: { ':uid': getUserId() },
+        ScanIndexForward: false, // Most recent first
+        Limit: 50
+      }).promise();
+      setAuditHistory(result.Items || []);
+    } catch (err) {
+      console.error('Error loading history:', err);
+      setAuditHistory([]);
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  const saveAuditHistory = async (reportKey, sections, prompts) => {
+    const dynamodb = new DynamoDB.DocumentClient();
+    try {
+      await dynamodb.put({
+        TableName: AUDIT_HISTORY_TABLE,
+        Item: {
+          user_id: getUserId(),
+          timestamp: new Date().toISOString(),
+          policy_file: selectedPolicy,
+          system_name: selectedSystem,
+          sections: sections,
+          prompts: prompts,
+          report_s3_key: reportKey
+        }
+      }).promise();
+    } catch (err) {
+      console.error('Error saving history:', err);
+    }
+  };
+
+  const getPresignedUrl = (s3Key) => {
+    const s3 = new S3();
+    return s3.getSignedUrl('getObject', { Bucket: BUCKET_NAME, Key: s3Key, Expires: 3600 });
   };
 
   const analyzePolicy = async () => {
@@ -140,37 +209,25 @@ const Dashboard = ({ user, signOut }) => {
   };
 
   const getStageFromState = (stateName) => {
-    if (stateName?.includes('AnalyzeSection') || stateName?.includes('AnalyzeSectionsInParallel') || stateName?.includes('FormatFinding')) {
-      return 1;
-    }
+    if (stateName?.includes('AnalyzeSection') || stateName?.includes('AnalyzeSectionsInParallel') || stateName?.includes('FormatFinding')) return 1;
     if (stateName?.includes('GenerateReport')) return 2;
     if (stateName?.includes('WorkflowComplete')) return 3;
     return 0;
   };
 
-  const waitForCompletion = async (arn, stepfunctions) => {
+  const waitForCompletion = async (arn, stepfunctions, prompts) => {
     try {
       let isRunning = true;
-      
       while (isRunning) {
         await new Promise(resolve => setTimeout(resolve, 2000));
-        
         const statusData = await stepfunctions.describeExecution({ executionArn: arn }).promise();
         const state = statusData.status;
         
-        // Get execution history for detailed progress
         try {
-          const history = await stepfunctions.getExecutionHistory({ 
-            executionArn: arn, 
-            reverseOrder: true,
-            maxResults: 50
-          }).promise();
-          
+          const history = await stepfunctions.getExecutionHistory({ executionArn: arn, reverseOrder: true, maxResults: 50 }).promise();
           const latestStateEntered = history.events?.find(e => e.stateEnteredEventDetails);
           const currentStateName = latestStateEntered?.stateEnteredEventDetails?.name;
-          
-          const stage = getStageFromState(currentStateName);
-          setCurrentStage(stage);
+          setCurrentStage(getStageFromState(currentStateName));
           setProgressMessage(currentStateName ? `Processing: ${currentStateName}` : 'Processing...');
         } catch (histErr) {
           console.log('Could not fetch history:', histErr);
@@ -180,7 +237,15 @@ const Dashboard = ({ user, signOut }) => {
           setCurrentStage(3);
           setProgressMessage('Report generated successfully!');
           const output = JSON.parse(statusData.output);
-          generatePresignedUrl(output.report_location);
+          const s3Key = output.report_location.replace(`s3://${BUCKET_NAME}/`, '');
+          setReportS3Key(s3Key);
+          setReportUrl(getPresignedUrl(s3Key));
+          setStatus('Report Generated Successfully!');
+          setLoading(false);
+          
+          // Save to history
+          await saveAuditHistory(s3Key, selectedSections.map(s => s.section), prompts);
+          
           isRunning = false;
           setTimeout(() => setProgressOpen(false), 1500);
         } else if (state === 'FAILED' || state === 'TIMED_OUT' || state === 'ABORTED') {
@@ -199,29 +264,15 @@ const Dashboard = ({ user, signOut }) => {
     }
   };
 
-  const generatePresignedUrl = (s3Uri) => {
-    try {
-      const s3 = new S3();
-      const key = s3Uri.replace(`s3://${BUCKET_NAME}/`, '');
-      const url = s3.getSignedUrl('getObject', { Bucket: BUCKET_NAME, Key: key, Expires: 3600 });
-      setReportUrl(url);
-      setStatus('Report Generated Successfully!');
-    } catch (err) {
-      setStatus('Error generating link: ' + err.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const startAudit = async () => {
     if (selectedSections.length === 0) {
       setStatus('Please select at least one section');
       return;
     }
 
-    // Reset and open progress modal
     setLoading(true);
     setReportUrl('');
+    setReportS3Key('');
     setProgressOpen(true);
     setCurrentStage(0);
     setProgressMessage('Initializing workflow...');
@@ -242,7 +293,7 @@ const Dashboard = ({ user, signOut }) => {
       }).promise();
       
       setProgressMessage('Workflow started...');
-      waitForCompletion(result.executionArn, stepfunctions);
+      waitForCompletion(result.executionArn, stepfunctions, prompts);
     } catch (err) {
       setStatus(`Error starting workflow: ${err.message}`);
       setLoading(false);
@@ -251,9 +302,11 @@ const Dashboard = ({ user, signOut }) => {
   };
 
   const closeProgressModal = () => {
-    if (!loading || workflowFailed) {
-      setProgressOpen(false);
-    }
+    if (!loading || workflowFailed) setProgressOpen(false);
+  };
+
+  const formatDate = (isoString) => {
+    return new Date(isoString).toLocaleString();
   };
 
   return (
@@ -263,91 +316,159 @@ const Dashboard = ({ user, signOut }) => {
           <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
             Compliance Auditor Control Center
           </Typography>
+          <Typography variant="body2" sx={{ mr: 2 }}>{getUserId()}</Typography>
           <Button color="inherit" onClick={signOut}>Sign Out</Button>
         </Toolbar>
       </AppBar>
 
-      <Container maxWidth="lg" sx={{ mt: 4 }}>
-        {/* Configuration Section */}
-        <Paper sx={{ p: 3, mb: 3 }}>
-          <Typography variant="h6" sx={{ mb: 2 }}>Configuration</Typography>
-          
-          <Typography variant="subtitle2" sx={{ mb: 1 }}>1. Select Policy Document:</Typography>
-          <Select 
-            fullWidth value={selectedPolicy} 
-            onChange={(e) => { setSelectedPolicy(e.target.value); setPolicyAnalyzed(false); setAllSections([]); setSelectedSections([]); }}
-            displayEmpty sx={{ mb: 3 }}
-          >
-            <MenuItem value="" disabled>Select a PDF...</MenuItem>
-            {policies.map(p => <MenuItem key={p} value={p}>{p}</MenuItem>)}
-          </Select>
+      <Container maxWidth="lg" sx={{ mt: 2 }}>
+        <Tabs value={activeTab} onChange={(e, v) => setActiveTab(v)} sx={{ mb: 3 }}>
+          <Tab icon={<AssessmentIcon />} label="New Audit" />
+          <Tab icon={<HistoryIcon />} label="History" />
+        </Tabs>
 
-          <Typography variant="subtitle2" sx={{ mb: 1 }}>2. Select System for SOC Audit:</Typography>
-          <Select 
-            fullWidth value={selectedSystem} 
-            onChange={(e) => setSelectedSystem(e.target.value)}
-            displayEmpty sx={{ mb: 3 }}
-          >
-            <MenuItem value="" disabled>Select System (e.g. CyberArk)...</MenuItem>
-            {systems.map(s => <MenuItem key={s} value={s}>{s}</MenuItem>)}
-          </Select>
+        {/* TAB 0: New Audit */}
+        {activeTab === 0 && (
+          <>
+            <Paper sx={{ p: 3, mb: 3 }}>
+              <Typography variant="h6" sx={{ mb: 2 }}>Configuration</Typography>
+              
+              <Typography variant="subtitle2" sx={{ mb: 1 }}>1. Select Policy Document:</Typography>
+              <Select 
+                fullWidth value={selectedPolicy} 
+                onChange={(e) => { setSelectedPolicy(e.target.value); setPolicyAnalyzed(false); setAllSections([]); setSelectedSections([]); }}
+                displayEmpty sx={{ mb: 3 }}
+              >
+                <MenuItem value="" disabled>Select a PDF...</MenuItem>
+                {policies.map(p => <MenuItem key={p} value={p}>{p}</MenuItem>)}
+              </Select>
 
-          <Button variant="contained" onClick={analyzePolicy} disabled={!selectedPolicy || !selectedSystem || loading}>
-            Analyze Structure
-          </Button>
-        </Paper>
+              <Typography variant="subtitle2" sx={{ mb: 1 }}>2. Select System for SOC Audit:</Typography>
+              <Select 
+                fullWidth value={selectedSystem} 
+                onChange={(e) => setSelectedSystem(e.target.value)}
+                displayEmpty sx={{ mb: 3 }}
+              >
+                <MenuItem value="" disabled>Select System (e.g. CyberArk)...</MenuItem>
+                {systems.map(s => <MenuItem key={s} value={s}>{s}</MenuItem>)}
+              </Select>
 
-        {/* Section Selection */}
-        {policyAnalyzed && (
-          <Paper sx={{ p: 3, mb: 3 }}>
-            <Typography variant="h6" sx={{ mb: 2 }}>Select Sections to Audit</Typography>
-            <Typography variant="body2" color="textSecondary" sx={{ mb: 3 }}>
-              Choose which policy sections to analyze. You can add multiple sections.
-            </Typography>
+              <Button variant="contained" onClick={analyzePolicy} disabled={!selectedPolicy || !selectedSystem || loading}>
+                Analyze Structure
+              </Button>
+            </Paper>
 
-            {selectedSections.map((item, idx) => (
-              <Card key={item.id} sx={{ mb: 3, backgroundColor: '#f5f5f5' }}>
-                <CardContent>
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
-                    <Typography variant="subtitle1" sx={{ fontWeight: 'bold' }}>Section {idx + 1}</Typography>
-                    <IconButton size="small" onClick={() => removeSection(item.id)} color="error"><DeleteIcon /></IconButton>
+            {policyAnalyzed && (
+              <Paper sx={{ p: 3, mb: 3 }}>
+                <Typography variant="h6" sx={{ mb: 2 }}>Select Sections to Audit</Typography>
+                <Typography variant="body2" color="textSecondary" sx={{ mb: 3 }}>
+                  Choose which policy sections to analyze. You can add multiple sections.
+                </Typography>
+
+                {selectedSections.map((item, idx) => (
+                  <Card key={item.id} sx={{ mb: 3, backgroundColor: '#f5f5f5' }}>
+                    <CardContent>
+                      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
+                        <Typography variant="subtitle1" sx={{ fontWeight: 'bold' }}>Section {idx + 1}</Typography>
+                        <IconButton size="small" onClick={() => removeSection(item.id)} color="error"><DeleteIcon /></IconButton>
+                      </Box>
+                      <Typography variant="body2" sx={{ mb: 1 }}>Select Section:</Typography>
+                      <Select fullWidth value={item.section} onChange={(e) => updateSection(item.id, e.target.value)} displayEmpty sx={{ mb: 2 }}>
+                        <MenuItem value="" disabled>Choose a section...</MenuItem>
+                        {allSections.map(sec => <MenuItem key={sec} value={sec}>{sec}</MenuItem>)}
+                      </Select>
+                      <Typography variant="body2" sx={{ mb: 1 }}>Prompt:</Typography>
+                      <TextField fullWidth multiline rows={4} value={item.prompt} onChange={(e) => updatePrompt(item.id, e.target.value)} placeholder="Edit the prompt..." />
+                    </CardContent>
+                  </Card>
+                ))}
+
+                <Box sx={{ display: 'flex', gap: 2, mb: 3 }}>
+                  <Button variant="outlined" startIcon={<AddIcon />} onClick={addSection}>Add Section</Button>
+                  {selectedSections.length === 0 && <Button variant="contained" startIcon={<AddIcon />} onClick={addSection}>Select First Section</Button>}
+                </Box>
+
+                {selectedSections.length > 0 && (
+                  <Box sx={{ mt: 3 }}>
+                    {!reportUrl ? (
+                      <Button variant="contained" color="success" size="large" fullWidth onClick={startAudit} disabled={loading || selectedSections.some(s => !s.section)}>
+                        {loading ? <CircularProgress size={24} color="inherit" /> : "🚀 Generate Compliance Report"}
+                      </Button>
+                    ) : (
+                      <Button variant="contained" color="primary" size="large" fullWidth href={reportUrl} target="_blank" startIcon={<DownloadIcon />}>
+                        Download Report
+                      </Button>
+                    )}
                   </Box>
-                  <Typography variant="body2" sx={{ mb: 1 }}>Select Section:</Typography>
-                  <Select fullWidth value={item.section} onChange={(e) => updateSection(item.id, e.target.value)} displayEmpty sx={{ mb: 2 }}>
-                    <MenuItem value="" disabled>Choose a section...</MenuItem>
-                    {allSections.map(sec => <MenuItem key={sec} value={sec}>{sec}</MenuItem>)}
-                  </Select>
-                  <Typography variant="body2" sx={{ mb: 1 }}>Prompt:</Typography>
-                  <TextField fullWidth multiline rows={4} value={item.prompt} onChange={(e) => updatePrompt(item.id, e.target.value)} placeholder="Edit the prompt..." />
-                </CardContent>
-              </Card>
-            ))}
-
-            <Box sx={{ display: 'flex', gap: 2, mb: 3 }}>
-              <Button variant="outlined" startIcon={<AddIcon />} onClick={addSection}>Add Section</Button>
-              {selectedSections.length === 0 && <Button variant="contained" startIcon={<AddIcon />} onClick={addSection}>Select First Section</Button>}
-            </Box>
-
-            {selectedSections.length > 0 && (
-              <Box sx={{ mt: 3 }}>
-                {!reportUrl ? (
-                  <Button variant="contained" color="success" size="large" fullWidth onClick={startAudit} disabled={loading || selectedSections.some(s => !s.section)}>
-                    {loading ? <CircularProgress size={24} color="inherit" /> : "🚀 Generate Compliance Report"}
-                  </Button>
-                ) : (
-                  <Button variant="contained" color="primary" size="large" fullWidth href={reportUrl} target="_blank" startIcon={<DownloadIcon />}>
-                    Download Report
-                  </Button>
                 )}
-              </Box>
+              </Paper>
             )}
-          </Paper>
+
+            {status && (
+              <Alert severity={status.includes("Error") || status.includes("Failed") ? "error" : "info"} sx={{ mt: 2 }}>
+                {status}
+              </Alert>
+            )}
+          </>
         )}
 
-        {status && (
-          <Alert severity={status.includes("Error") || status.includes("Failed") ? "error" : "info"} sx={{ mt: 2 }}>
-            {status}
-          </Alert>
+        {/* TAB 1: History */}
+        {activeTab === 1 && (
+          <Paper sx={{ p: 3 }}>
+            <Typography variant="h6" sx={{ mb: 2 }}>Audit History</Typography>
+            
+            {historyLoading ? (
+              <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
+                <CircularProgress />
+              </Box>
+            ) : auditHistory.length === 0 ? (
+              <Typography color="textSecondary">No audit history found.</Typography>
+            ) : (
+              <TableContainer>
+                <Table>
+                  <TableHead>
+                    <TableRow>
+                      <TableCell>Date</TableCell>
+                      <TableCell>System</TableCell>
+                      <TableCell>Sections</TableCell>
+                      <TableCell>Prompts</TableCell>
+                      <TableCell>Report</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {auditHistory.map((item, idx) => (
+                      <TableRow key={idx}>
+                        <TableCell>{formatDate(item.timestamp)}</TableCell>
+                        <TableCell>{item.system_name}</TableCell>
+                        <TableCell>
+                          {(item.sections || []).map((s, i) => (
+                            <Typography key={i} variant="body2">{s}</Typography>
+                          ))}
+                        </TableCell>
+                        <TableCell sx={{ maxWidth: 300 }}>
+                          {(item.prompts || []).map((p, i) => (
+                            <Typography key={i} variant="body2" sx={{ fontSize: '0.75rem', mb: 1 }} noWrap title={p.prompt}>
+                              {p.prompt?.substring(0, 80)}...
+                            </Typography>
+                          ))}
+                        </TableCell>
+                        <TableCell>
+                          <Button 
+                            size="small" 
+                            startIcon={<DownloadIcon />}
+                            href={getPresignedUrl(item.report_s3_key)} 
+                            target="_blank"
+                          >
+                            Download
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            )}
+          </Paper>
         )}
       </Container>
 
@@ -387,14 +508,10 @@ const Dashboard = ({ user, signOut }) => {
             {progressMessage}
           </Typography>
 
-          {!workflowFailed && currentStage < 3 && (
-            <LinearProgress sx={{ mb: 2 }} />
-          )}
+          {!workflowFailed && currentStage < 3 && <LinearProgress sx={{ mb: 2 }} />}
 
           {(workflowFailed || currentStage === 3) && (
-            <Button fullWidth variant="outlined" onClick={() => setProgressOpen(false)}>
-              Close
-            </Button>
+            <Button fullWidth variant="outlined" onClick={() => setProgressOpen(false)}>Close</Button>
           )}
         </Box>
       </Modal>

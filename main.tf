@@ -992,6 +992,25 @@ resource "aws_dynamodb_table" "policy_sections" {
   tags = var.tags
 }
 
+resource "aws_dynamodb_table" "audit_history" {
+  name         = "${var.project_name}-audit-history"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "user_id"
+  range_key    = "timestamp"
+
+  attribute {
+    name = "user_id"
+    type = "S"
+  }
+
+  attribute {
+    name = "timestamp"
+    type = "S"
+  }
+
+  tags = var.tags
+}
+
 ################################################################################
 # Layer 3: AI Reasoning Core - Bedrock Agent Action Group Lambda
 ################################################################################
@@ -1919,6 +1938,12 @@ resource "aws_iam_role_policy" "frontend_permissions" {
           aws_sfn_state_machine.compliance_workflow.arn,
           "arn:aws:states:${var.aws_region}:${data.aws_caller_identity.current.account_id}:execution:${aws_sfn_state_machine.compliance_workflow.name}:*"
         ]
+      },
+      # Allow reading/writing audit history (scoped to user's own records)
+      {
+        Effect = "Allow"
+        Action = ["dynamodb:PutItem", "dynamodb:Query"]
+        Resource = aws_dynamodb_table.audit_history.arn
       }
     ]
   })

@@ -50,6 +50,11 @@ output "soc2_opensearch_collection_endpoint" {
   value       = aws_opensearchserverless_collection.soc2_collection.collection_endpoint
 }
 
+output "audit_history_table_name" {
+  description = "DynamoDB table for audit history"
+  value       = aws_dynamodb_table.audit_history.name
+}
+
 output "bedrock_agent_id" {
   description = "ID of the Bedrock Agent"
   value       = aws_bedrockagent_agent.compliance_auditor.agent_id
