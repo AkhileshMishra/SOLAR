@@ -1239,10 +1239,6 @@ resource "aws_bedrockagent_agent_alias" "compliance_auditor_prod" {
   agent_id         = aws_bedrockagent_agent.compliance_auditor.agent_id
   description      = "Production alias for Compliance Auditor Agent"
   
-  routing_configuration {
-    agent_version = "DRAFT"
-  }
-  
   tags = var.tags
 
   depends_on = [
