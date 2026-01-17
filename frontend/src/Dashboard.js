@@ -49,7 +49,6 @@ const Dashboard = ({ user, signOut }) => {
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState('');
   const [reportUrl, setReportUrl] = useState('');
-  const [reportS3Key, setReportS3Key] = useState('');
   const [policyAnalyzed, setPolicyAnalyzed] = useState(false);
 
   // Progress modal state
@@ -94,6 +93,7 @@ const Dashboard = ({ user, signOut }) => {
     if (activeTab === 1) {
       loadAuditHistory();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab]);
 
   const listPolicies = async () => {
@@ -238,7 +238,6 @@ const Dashboard = ({ user, signOut }) => {
           setProgressMessage('Report generated successfully!');
           const output = JSON.parse(statusData.output);
           const s3Key = output.report_location.replace(`s3://${BUCKET_NAME}/`, '');
-          setReportS3Key(s3Key);
           setReportUrl(getPresignedUrl(s3Key));
           setStatus('Report Generated Successfully!');
           setLoading(false);
@@ -272,7 +271,6 @@ const Dashboard = ({ user, signOut }) => {
 
     setLoading(true);
     setReportUrl('');
-    setReportS3Key('');
     setProgressOpen(true);
     setCurrentStage(0);
     setProgressMessage('Initializing workflow...');
