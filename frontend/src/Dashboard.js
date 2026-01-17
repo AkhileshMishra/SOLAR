@@ -20,6 +20,8 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorIcon from '@mui/icons-material/Error';
 import HistoryIcon from '@mui/icons-material/History';
 import AssessmentIcon from '@mui/icons-material/Assessment';
+import ArrowBackIcon from '@mui/icons-material/ArrowBack';
+import CloseIcon from '@mui/icons-material/Close';
 
 // --- CONFIGURATION ---
 const BUCKET_NAME = "compliance-reporting-bucket-sg-430118833069"; 
@@ -50,6 +52,10 @@ const Dashboard = ({ user, signOut }) => {
   const [status, setStatus] = useState('');
   const [reportUrl, setReportUrl] = useState('');
   const [policyAnalyzed, setPolicyAnalyzed] = useState(false);
+
+  // Report view state
+  const [showReportView, setShowReportView] = useState(false);
+  const [reportContent, setReportContent] = useState('');
 
   // Progress modal state
   const [progressOpen, setProgressOpen] = useState(false);
@@ -126,7 +132,7 @@ const Dashboard = ({ user, signOut }) => {
         TableName: AUDIT_HISTORY_TABLE,
         KeyConditionExpression: 'user_id = :uid',
         ExpressionAttributeValues: { ':uid': getUserId() },
-        ScanIndexForward: false, // Most recent first
+        ScanIndexForward: false,
         Limit: 50
       }).promise();
       setAuditHistory(result.Items || []);
@@ -161,6 +167,18 @@ const Dashboard = ({ user, signOut }) => {
   const getPresignedUrl = (s3Key) => {
     const s3 = new S3();
     return s3.getSignedUrl('getObject', { Bucket: BUCKET_NAME, Key: s3Key, Expires: 3600 });
+  };
+
+  const fetchReportContent = async (s3Key) => {
+    const s3 = new S3();
+    try {
+      const data = await s3.getObject({ Bucket: BUCKET_NAME, Key: s3Key }).promise();
+      const content = data.Body.toString('utf-8');
+      setReportContent(content);
+    } catch (err) {
+      console.error('Error fetching report content:', err);
+      setReportContent('Error loading report content');
+    }
   };
 
   const analyzePolicy = async () => {
@@ -245,8 +263,15 @@ const Dashboard = ({ user, signOut }) => {
           // Save to history
           await saveAuditHistory(s3Key, selectedSections.map(s => s.section), prompts);
           
+          // Fetch report content for display
+          await fetchReportContent(s3Key);
+          
           isRunning = false;
-          setTimeout(() => setProgressOpen(false), 1500);
+          // Close modal and show report view
+          setTimeout(() => {
+            setProgressOpen(false);
+            setShowReportView(true);
+          }, 1000);
         } else if (state === 'FAILED' || state === 'TIMED_OUT' || state === 'ABORTED') {
           setWorkflowFailed(true);
           setProgressMessage(`Workflow ${state.toLowerCase()}`);
@@ -271,6 +296,8 @@ const Dashboard = ({ user, signOut }) => {
 
     setLoading(true);
     setReportUrl('');
+    setReportContent('');
+    setShowReportView(false);
     setProgressOpen(true);
     setCurrentStage(0);
     setProgressMessage('Initializing workflow...');
@@ -303,8 +330,41 @@ const Dashboard = ({ user, signOut }) => {
     if (!loading || workflowFailed) setProgressOpen(false);
   };
 
+  // Go back to audit form (preserves selections)
+  const handleGoBack = () => {
+    setShowReportView(false);
+  };
+
+  // Close and reset to fresh audit
+  const handleCloseReport = () => {
+    setShowReportView(false);
+    setReportUrl('');
+    setReportContent('');
+    setSelectedSections([]);
+    setPolicyAnalyzed(false);
+    setSelectedPolicy('');
+    setSelectedSystem('');
+    setStatus('');
+  };
+
   const formatDate = (isoString) => {
     return new Date(isoString).toLocaleString();
+  };
+
+  // Convert markdown-like content to basic HTML for display
+  const renderReportContent = (content) => {
+    if (!content) return null;
+    
+    // Basic markdown to HTML conversion
+    let html = content
+      .replace(/^### (.*$)/gim, '<h3>$1</h3>')
+      .replace(/^## (.*$)/gim, '<h2>$1</h2>')
+      .replace(/^# (.*$)/gim, '<h1>$1</h1>')
+      .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+      .replace(/\*(.*?)\*/g, '<em>$1</em>')
+      .replace(/\n/g, '<br/>');
+    
+    return <div dangerouslySetInnerHTML={{ __html: html }} />;
   };
 
   return (
@@ -320,13 +380,64 @@ const Dashboard = ({ user, signOut }) => {
       </AppBar>
 
       <Container maxWidth="lg" sx={{ mt: 2 }}>
-        <Tabs value={activeTab} onChange={(e, v) => setActiveTab(v)} sx={{ mb: 3 }}>
-          <Tab icon={<AssessmentIcon />} label="New Audit" />
-          <Tab icon={<HistoryIcon />} label="History" />
-        </Tabs>
+        {/* Only show tabs when not in report view */}
+        {!showReportView && (
+          <Tabs value={activeTab} onChange={(e, v) => setActiveTab(v)} sx={{ mb: 3 }}>
+            <Tab icon={<AssessmentIcon />} label="New Audit" />
+            <Tab icon={<HistoryIcon />} label="History" />
+          </Tabs>
+        )}
 
-        {/* TAB 0: New Audit */}
-        {activeTab === 0 && (
+        {/* REPORT VIEW */}
+        {showReportView && (
+          <Paper sx={{ p: 3, mb: 3 }}>
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
+              <Typography variant="h5">📋 Compliance Report</Typography>
+              <Box sx={{ display: 'flex', gap: 1 }}>
+                <Button variant="contained" href={reportUrl} target="_blank" startIcon={<DownloadIcon />}>
+                  Download
+                </Button>
+              </Box>
+            </Box>
+
+            <Box sx={{ mb: 2, p: 2, backgroundColor: '#f5f5f5', borderRadius: 1 }}>
+              <Typography variant="body2"><strong>Policy:</strong> {selectedPolicy}</Typography>
+              <Typography variant="body2"><strong>System:</strong> {selectedSystem}</Typography>
+              <Typography variant="body2"><strong>Sections:</strong> {selectedSections.map(s => s.section).join(', ')}</Typography>
+            </Box>
+
+            <Paper 
+              variant="outlined" 
+              sx={{ 
+                p: 3, 
+                maxHeight: '60vh', 
+                overflow: 'auto',
+                backgroundColor: '#fafafa',
+                fontFamily: 'inherit',
+                '& h1, & h2, & h3': { marginTop: 2, marginBottom: 1 },
+                '& strong': { color: '#1976d2' }
+              }}
+            >
+              {reportContent ? renderReportContent(reportContent) : (
+                <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
+                  <CircularProgress />
+                </Box>
+              )}
+            </Paper>
+
+            <Box sx={{ display: 'flex', gap: 2, mt: 3 }}>
+              <Button variant="outlined" startIcon={<ArrowBackIcon />} onClick={handleGoBack}>
+                Go Back
+              </Button>
+              <Button variant="outlined" color="error" startIcon={<CloseIcon />} onClick={handleCloseReport}>
+                Close & New Audit
+              </Button>
+            </Box>
+          </Paper>
+        )}
+
+        {/* TAB 0: New Audit (hidden when showing report) */}
+        {activeTab === 0 && !showReportView && (
           <>
             <Paper sx={{ p: 3, mb: 3 }}>
               <Typography variant="h6" sx={{ mb: 2 }}>Configuration</Typography>
@@ -388,15 +499,9 @@ const Dashboard = ({ user, signOut }) => {
 
                 {selectedSections.length > 0 && (
                   <Box sx={{ mt: 3 }}>
-                    {!reportUrl ? (
-                      <Button variant="contained" color="success" size="large" fullWidth onClick={startAudit} disabled={loading || selectedSections.some(s => !s.section)}>
-                        {loading ? <CircularProgress size={24} color="inherit" /> : "🚀 Generate Compliance Report"}
-                      </Button>
-                    ) : (
-                      <Button variant="contained" color="primary" size="large" fullWidth href={reportUrl} target="_blank" startIcon={<DownloadIcon />}>
-                        Download Report
-                      </Button>
-                    )}
+                    <Button variant="contained" color="success" size="large" fullWidth onClick={startAudit} disabled={loading || selectedSections.some(s => !s.section)}>
+                      {loading ? <CircularProgress size={24} color="inherit" /> : "🚀 Generate Compliance Report"}
+                    </Button>
                   </Box>
                 )}
               </Paper>
@@ -411,7 +516,7 @@ const Dashboard = ({ user, signOut }) => {
         )}
 
         {/* TAB 1: History */}
-        {activeTab === 1 && (
+        {activeTab === 1 && !showReportView && (
           <Paper sx={{ p: 3 }}>
             <Typography variant="h6" sx={{ mb: 2 }}>Audit History</Typography>
             
@@ -508,7 +613,7 @@ const Dashboard = ({ user, signOut }) => {
 
           {!workflowFailed && currentStage < 3 && <LinearProgress sx={{ mb: 2 }} />}
 
-          {(workflowFailed || currentStage === 3) && (
+          {workflowFailed && (
             <Button fullWidth variant="outlined" onClick={() => setProgressOpen(false)}>Close</Button>
           )}
         </Box>
