@@ -945,6 +945,14 @@ resource "aws_lambda_permission" "allow_s3_invocation" {
   source_arn    = aws_s3_bucket.compliance_data.arn
 }
 
+resource "aws_lambda_permission" "allow_s3_policy_indexer" {
+  statement_id  = "AllowExecutionFromS3Policy"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.policy_indexer.function_name
+  principal     = "s3.amazonaws.com"
+  source_arn    = aws_s3_bucket.compliance_data.arn
+}
+
 resource "aws_s3_bucket_notification" "log_upload_trigger" {
   bucket = aws_s3_bucket.compliance_data.id
   
@@ -954,7 +962,104 @@ resource "aws_s3_bucket_notification" "log_upload_trigger" {
     filter_prefix       = "inputs/logs/"
   }
   
-  depends_on = [aws_lambda_permission.allow_s3_invocation]
+  lambda_function {
+    lambda_function_arn = aws_lambda_function.policy_indexer.arn
+    events              = ["s3:ObjectCreated:*"]
+    filter_prefix       = "inputs/policy/"
+    filter_suffix       = ".pdf"
+  }
+  
+  depends_on = [
+    aws_lambda_permission.allow_s3_invocation,
+    aws_lambda_permission.allow_s3_policy_indexer
+  ]
+}
+
+################################################################################
+# Policy Sections DynamoDB Table & Indexer Lambda
+################################################################################
+
+resource "aws_dynamodb_table" "policy_sections" {
+  name         = "${var.project_name}-policy-sections"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "policy_file"
+
+  attribute {
+    name = "policy_file"
+    type = "S"
+  }
+
+  tags = var.tags
+}
+
+resource "aws_iam_role" "policy_indexer" {
+  name = "${var.project_name}-policy-indexer-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action = "sts:AssumeRole"
+      Effect = "Allow"
+      Principal = { Service = "lambda.amazonaws.com" }
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "policy_indexer" {
+  name = "${var.project_name}-policy-indexer-policy"
+  role = aws_iam_role.policy_indexer.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
+        Resource = "arn:aws:logs:*:*:*"
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["s3:GetObject"]
+        Resource = "${aws_s3_bucket.compliance_data.arn}/inputs/policy/*"
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["dynamodb:PutItem", "dynamodb:GetItem"]
+        Resource = aws_dynamodb_table.policy_sections.arn
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["bedrock:InvokeModel"]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+data "archive_file" "policy_indexer" {
+  type        = "zip"
+  source_dir  = "${path.module}/src/policy_indexer"
+  output_path = "${path.module}/dist/policy_indexer.zip"
+}
+
+resource "aws_lambda_function" "policy_indexer" {
+  filename         = data.archive_file.policy_indexer.output_path
+  function_name    = "${var.project_name}-policy-indexer"
+  role             = aws_iam_role.policy_indexer.arn
+  handler          = "lambda_function.lambda_handler"
+  source_code_hash = data.archive_file.policy_indexer.output_base64sha256
+  runtime          = "python3.11"
+  timeout          = 120
+  memory_size      = 512
+
+  environment {
+    variables = {
+      DYNAMODB_TABLE   = aws_dynamodb_table.policy_sections.name
+      BEDROCK_MODEL_ID = var.bedrock_model_id
+    }
+  }
+
+  tags = var.tags
 }
 
 ################################################################################
@@ -1306,13 +1411,17 @@ resource "aws_iam_role_policy" "policy_section_fetcher" {
           "bedrock:InvokeModel"
         ]
         Resource = [
-          # PERMANENT FIX: Use '*' for the region to allow Tokyo, Seoul, US, etc.
           "arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-4-20250514-v1:0",
-          
-          # Keep your local region wildcard for other models just in case
           "arn:aws:bedrock:${var.aws_region}::foundation-model/*",
           "arn:aws:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:inference-profile/*"
         ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "dynamodb:GetItem"
+        ]
+        Resource = aws_dynamodb_table.policy_sections.arn
       },
       {
         Effect = "Allow"
@@ -1348,6 +1457,7 @@ resource "aws_lambda_function" "policy_section_fetcher" {
       BEDROCK_MODEL_ID = var.bedrock_model_id
       POLICY_BUCKET    = aws_s3_bucket.compliance_data.bucket
       POLICY_PREFIX    = "inputs/policy/"
+      DYNAMODB_TABLE   = aws_dynamodb_table.policy_sections.name
     }
   }
   
