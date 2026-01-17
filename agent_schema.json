@@ -20,7 +20,7 @@
                 "properties": {
                   "query": {
                     "type": "string",
-                    "description": "SQL SELECT statement to execute against the compliance_db database. Must be a valid Athena SQL query."
+                    "description": "SQL SELECT statement to execute against the compliance_db database. Must be valid Athena/Presto SQL. IMPORTANT: Athena does NOT support ILIKE. For case-insensitive matching use LOWER(column) LIKE LOWER('%value%')."
                   },
                   "max_results": {
                     "type": "integer",
