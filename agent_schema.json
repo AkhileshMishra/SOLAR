@@ -137,6 +137,54 @@
           }
         }
       }
+    },
+    "/read-soc-report": {
+      "post": {
+        "summary": "Read SOC 2 report for a vendor system",
+        "description": "Extracts text from the latest SOC 2 PDF report for a vendor (e.g., Salesforce, CyberArk). Use this to validate vendor compliance controls against policy requirements.",
+        "operationId": "readSocReport",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "system_name": {
+                    "type": "string",
+                    "description": "Vendor/system name matching the S3 folder (e.g., Salesforce, CyberArk)"
+                  }
+                },
+                "required": ["system_name"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "SOC report content retrieved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "system": {
+                      "type": "string"
+                    },
+                    "report_date": {
+                      "type": "string"
+                    },
+                    "content_text": {
+                      "type": "string",
+                      "description": "Extracted text from SOC 2 PDF"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     }
   }
 }

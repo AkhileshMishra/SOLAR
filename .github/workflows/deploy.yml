@@ -287,6 +287,23 @@ jobs:
         run: terraform apply -auto-approve tfplan
 
       # ----------------------------------------
+      # 12.5 Prepare Bedrock Agent (Required after schema changes)
+      # ----------------------------------------
+      - name: Prepare Bedrock Agent
+        run: |
+          AGENT_ID=$(terraform output -raw bedrock_agent_id)
+          echo "Preparing agent: $AGENT_ID"
+          
+          aws bedrock-agent prepare-agent \
+            --agent-id $AGENT_ID \
+            --region ${{ env.AWS_REGION }}
+          
+          echo "Waiting for agent to be prepared..."
+          sleep 30
+          
+          echo "✓ Agent prepared successfully"
+
+      # ----------------------------------------
       # 13. Get Terraform Outputs
       # ----------------------------------------
       - name: Get Terraform Outputs
