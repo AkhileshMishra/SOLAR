@@ -1814,7 +1814,8 @@ resource "aws_sfn_state_machine" "compliance_workflow" {
       "Parameters": {
         "status": "SUCCESS",
         "policy_file.$": "$.policy_file",
-        "report_location.$": "$.report_result.Payload.report_location"
+        "report_location.$": "$.report_result.Payload.report_location",
+		"html_key.$": "$.report_result.Payload.html_key"
       },
       "End": true
     }
