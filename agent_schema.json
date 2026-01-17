@@ -137,62 +137,6 @@
           }
         }
       }
-    },
-    "/read-soc-report": {
-      "post": {
-        "summary": "Read SOC 2 report for a specific system",
-        "description": "Extracts and returns text content from the latest SOC 2 PDF report for a given system name (e.g., Salesforce, CyberArk). Use this to validate vendor compliance controls.",
-        "operationId": "readSocReport",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "system_name": {
-                    "type": "string",
-                    "description": "Name of the system/vendor to retrieve SOC report for (e.g., Salesforce, CyberArk). Must match folder name in S3."
-                  }
-                },
-                "required": ["system_name"]
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "SOC report content retrieved successfully",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "system": {
-                      "type": "string",
-                      "description": "System name"
-                    },
-                    "report_date": {
-                      "type": "string",
-                      "description": "Report date or 'Latest'"
-                    },
-                    "content_text": {
-                      "type": "string",
-                      "description": "Extracted text content from the SOC 2 PDF report"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "No SOC report found for the specified system"
-          },
-          "500": {
-            "description": "Error reading SOC report"
-          }
-        }
-      }
     }
   }
 }
