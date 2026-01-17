@@ -641,13 +641,13 @@ resource "aws_bedrockagent_data_source" "policy_documents" {
 
 # OpenSearch Collection for SOC2 KB
 resource "aws_opensearchserverless_security_policy" "soc2_encryption" {
-  name        = "${var.project_name}-soc2-enc"
+  name        = "soc2-kb-enc"
   type        = "encryption"
   description = "Encryption policy for SOC2 KB collection"
   policy = jsonencode({
     Rules = [
       {
-        Resource     = ["collection/${var.project_name}-soc2-vectors"]
+        Resource     = ["collection/soc2-reports-vectors"]
         ResourceType = "collection"
       }
     ]
@@ -656,14 +656,14 @@ resource "aws_opensearchserverless_security_policy" "soc2_encryption" {
 }
 
 resource "aws_opensearchserverless_security_policy" "soc2_network" {
-  name        = "${var.project_name}-soc2-net"
+  name        = "soc2-kb-net"
   type        = "network"
   description = "Network policy for SOC2 KB collection"
   policy = jsonencode([
     {
       Rules = [
         {
-          Resource     = ["collection/${var.project_name}-soc2-vectors"]
+          Resource     = ["collection/soc2-reports-vectors"]
           ResourceType = "collection"
         }
       ]
@@ -673,14 +673,14 @@ resource "aws_opensearchserverless_security_policy" "soc2_network" {
 }
 
 resource "aws_opensearchserverless_access_policy" "soc2_data" {
-  name        = "${var.project_name}-soc2-data"
+  name        = "soc2-kb-data"
   type        = "data"
   description = "Data access policy for SOC2 Knowledge Base"
   policy = jsonencode([
     {
       Rules = [
         {
-          Resource     = ["collection/${var.project_name}-soc2-vectors"]
+          Resource     = ["collection/soc2-reports-vectors"]
           ResourceType = "collection"
           Permission   = [
             "aoss:CreateCollectionItems",
@@ -690,7 +690,7 @@ resource "aws_opensearchserverless_access_policy" "soc2_data" {
           ]
         },
         {
-          Resource     = ["index/${var.project_name}-soc2-vectors/*"]
+          Resource     = ["index/soc2-reports-vectors/*"]
           ResourceType = "index"
           Permission   = [
             "aoss:CreateIndex",
@@ -713,7 +713,7 @@ resource "aws_opensearchserverless_access_policy" "soc2_data" {
 }
 
 resource "aws_opensearchserverless_collection" "soc2_collection" {
-  name        = "${var.project_name}-soc2-vectors"
+  name        = "soc2-reports-vectors"
   type        = "VECTORSEARCH"
   description = "Vector store for SOC2 Reports Knowledge Base"
 
@@ -825,7 +825,7 @@ PYTHON_SCRIPT
 
 # SOC2 Knowledge Base
 resource "aws_bedrockagent_knowledge_base" "soc2_kb" {
-  name        = "${var.project_name}-SOC2-KB"
+  name        = "SOC2-Reports-KB"
   description = "Knowledge Base for vendor SOC2 compliance reports"
   role_arn    = aws_iam_role.bedrock_kb_role.arn
 
