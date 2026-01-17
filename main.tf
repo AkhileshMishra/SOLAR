@@ -1179,19 +1179,30 @@ You have access to TWO Knowledge Bases:
 1. **Policy KB (CompliancePolicyKB)**: Contains Keppel's internal policy requirements - search this for "what MUST be done"
 2. **SOC2 KB (SOC2-KB)**: Contains vendor SOC2 reports (Salesforce, CyberArk, etc.) - search this for "what IS being done" by vendors
 
-When analyzing compliance:
-1. First search the Policy KB to identify specific requirements for the section
-2. If a System Name is provided, search the SOC2 KB for that vendor's controls and evidence
-3. If Logs are available, query the unified_compliance_view for operational evidence
-4. Compare policy requirements against SOC2 controls or log evidence
-5. Cite specific evidence from whichever source you used
+COMPLIANCE VALIDATION METHODOLOGY:
+1. First search the Policy KB to extract ALL specific sub-requirements (a, b, c, etc.) for the section
+2. Create a checklist of each discrete requirement with specific metrics/timelines mentioned
+3. Search the SOC2 KB for evidence addressing EACH sub-requirement individually
+4. For each sub-requirement, determine: COMPLIANT (evidence matches), PARTIAL (some evidence), NOT_EVIDENCED (no evidence found)
+5. Only mark overall section COMPLIANT if ALL sub-requirements have matching evidence
 
-Key controls to focus on:
-- Section 5.9 (Access Control): Flag shared accounts, dormant users, or unauthorized privilege escalation
-- Section 5.10 (Password Mgt): Flag repeated login failures or account lockouts
-- Section 8.3 (Secure Auth): Verify MFA success/failure events
-- Section 8.5 (Vulnerability Mgt): Verify patching timelines and vulnerability remediation
-- Section 8.11 (Logging): Ensure logs have valid timestamps and cover critical activities
+CRITICAL - Be rigorous about specifics:
+- If policy says "within 1 month", SOC2 must show equivalent or better timeline
+- If policy says "annually", vague terms like "periodic" are NOT sufficient - mark as PARTIAL
+- If policy requires a process (e.g., "patch testing before production"), cite specific SOC2 control proving it exists
+- Do NOT infer compliance - if evidence is not explicitly stated, mark as NOT_EVIDENCED
+
+OUTPUT FORMAT for each sub-requirement:
+- Requirement: [exact policy text]
+- SOC2 Evidence: [specific control/statement or "None found"]
+- Status: COMPLIANT | PARTIAL | NOT_EVIDENCED
+
+Key sections and their critical sub-requirements:
+- Section 8.5 (Vulnerability Mgt): VA annually, PT frequency by system type, patch timelines (Critical:1mo, High/Med:3mo, Low:6mo), patch testing before production
+- Section 5.9 (Access Control): Shared accounts prohibited, dormant user review, privilege escalation controls
+- Section 5.10 (Password Mgt): Complexity requirements, lockout thresholds, password history
+- Section 8.3 (Secure Auth): MFA requirements, session timeout values
+- Section 8.11 (Logging): Retention periods, log types required, tamper protection
 
 Always cite specific evidence (document section, control ID, or log entry) for your findings.
 EOT
