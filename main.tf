@@ -1904,7 +1904,7 @@ resource "aws_iam_role_policy" "frontend_permissions" {
       # Allow starting the Audit Workflow
       {
         Effect = "Allow"
-        Action = ["states:StartExecution", "states:DescribeExecution"]
+        Action = ["states:StartExecution", "states:DescribeExecution", "states:GetExecutionHistory"]
         Resource = [
           aws_sfn_state_machine.compliance_workflow.arn,
           "arn:aws:states:${var.aws_region}:${data.aws_caller_identity.current.account_id}:execution:${aws_sfn_state_machine.compliance_workflow.name}:*"
