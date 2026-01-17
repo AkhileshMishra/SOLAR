@@ -390,15 +390,26 @@ const Dashboard = ({ user, signOut }) => {
               variant="outlined" 
               sx={{ 
                 p: 0, 
-                maxHeight: '60vh', 
-                overflow: 'auto',
-                backgroundColor: '#fff'
+                height: '65vh', 
+                overflow: 'hidden',
+                backgroundColor: '#fff',
+                borderRadius: 2,
+                boxShadow: '0 2px 8px rgba(0,0,0,0.1)'
               }}
             >
               {reportContent ? (
-                <div dangerouslySetInnerHTML={{ __html: reportContent }} />
+                <iframe
+                  srcDoc={reportContent}
+                  title="Compliance Report"
+                  style={{
+                    width: '100%',
+                    height: '100%',
+                    border: 'none',
+                    backgroundColor: '#f5f5f5'
+                  }}
+                />
               ) : (
-                <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
+                <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
                   <CircularProgress />
                 </Box>
               )}
