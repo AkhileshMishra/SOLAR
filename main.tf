@@ -567,7 +567,8 @@ resource "aws_iam_role_policy" "bedrock_kb_policy" {
         ]
         Resource = [
           aws_s3_bucket.compliance_data.arn,
-          "${aws_s3_bucket.compliance_data.arn}/inputs/policy/*"
+          "${aws_s3_bucket.compliance_data.arn}/inputs/policy/*",
+          "${aws_s3_bucket.compliance_data.arn}/inputs/SOCreports/*"
         ]
       },
       {
@@ -632,6 +633,259 @@ resource "aws_bedrockagent_data_source" "policy_documents" {
       inclusion_prefixes = ["inputs/policy/"]
     }
   }
+}
+
+################################################################################
+# SOC2 Reports Knowledge Base (Separate from Policy KB)
+################################################################################
+
+# OpenSearch Collection for SOC2 KB
+resource "aws_opensearchserverless_security_policy" "soc2_encryption" {
+  name        = "${var.project_name}-soc2-enc"
+  type        = "encryption"
+  description = "Encryption policy for SOC2 KB collection"
+  policy = jsonencode({
+    Rules = [
+      {
+        Resource     = ["collection/${var.project_name}-soc2-vectors"]
+        ResourceType = "collection"
+      }
+    ]
+    AWSOwnedKey = true
+  })
+}
+
+resource "aws_opensearchserverless_security_policy" "soc2_network" {
+  name        = "${var.project_name}-soc2-net"
+  type        = "network"
+  description = "Network policy for SOC2 KB collection"
+  policy = jsonencode([
+    {
+      Rules = [
+        {
+          Resource     = ["collection/${var.project_name}-soc2-vectors"]
+          ResourceType = "collection"
+        }
+      ]
+      AllowFromPublic = true
+    }
+  ])
+}
+
+resource "aws_opensearchserverless_access_policy" "soc2_data" {
+  name        = "${var.project_name}-soc2-data"
+  type        = "data"
+  description = "Data access policy for SOC2 Knowledge Base"
+  policy = jsonencode([
+    {
+      Rules = [
+        {
+          Resource     = ["collection/${var.project_name}-soc2-vectors"]
+          ResourceType = "collection"
+          Permission   = [
+            "aoss:CreateCollectionItems",
+            "aoss:DeleteCollectionItems",
+            "aoss:UpdateCollectionItems",
+            "aoss:DescribeCollectionItems"
+          ]
+        },
+        {
+          Resource     = ["index/${var.project_name}-soc2-vectors/*"]
+          ResourceType = "index"
+          Permission   = [
+            "aoss:CreateIndex",
+            "aoss:DeleteIndex",
+            "aoss:UpdateIndex",
+            "aoss:DescribeIndex",
+            "aoss:ReadDocument",
+            "aoss:WriteDocument"
+          ]
+        }
+      ]
+      Principal = [
+        aws_iam_role.bedrock_kb_role.arn,
+        data.aws_caller_identity.current.arn,
+        "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/KAIZERODeploymentServer",
+        "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/GitHubActions-SOLAR-Deploy"
+      ]
+    }
+  ])
+}
+
+resource "aws_opensearchserverless_collection" "soc2_collection" {
+  name        = "${var.project_name}-soc2-vectors"
+  type        = "VECTORSEARCH"
+  description = "Vector store for SOC2 Reports Knowledge Base"
+
+  depends_on = [
+    aws_opensearchserverless_security_policy.soc2_encryption,
+    aws_opensearchserverless_security_policy.soc2_network,
+    aws_opensearchserverless_access_policy.soc2_data
+  ]
+
+  tags = var.tags
+}
+
+# Create vector index for SOC2 KB
+resource "null_resource" "create_soc2_opensearch_index" {
+  triggers = {
+    collection_endpoint = aws_opensearchserverless_collection.soc2_collection.collection_endpoint
+    caller_arn = data.aws_caller_identity.current.arn
+  }
+
+  provisioner "local-exec" {
+    command = <<-EOT
+      echo "Waiting 60 seconds for SOC2 OpenSearch collection to be ready..."
+      sleep 60
+      
+      pip3 install boto3 requests requests-aws4auth --quiet
+      
+      export AWS_DEFAULT_REGION="${var.aws_region}"
+      export OPENSEARCH_ENDPOINT="${aws_opensearchserverless_collection.soc2_collection.collection_endpoint}"
+      
+      python3 << 'PYTHON_SCRIPT'
+import boto3
+import os
+import requests
+import time
+from requests_aws4auth import AWS4Auth
+
+session = boto3.Session()
+credentials = session.get_credentials()
+region = os.environ.get('AWS_DEFAULT_REGION', 'ap-southeast-1')
+service = 'aoss'
+
+awsauth = AWS4Auth(
+    credentials.access_key,
+    credentials.secret_key,
+    region,
+    service,
+    session_token=credentials.token
+)
+
+endpoint = os.environ.get('OPENSEARCH_ENDPOINT')
+index_name = 'bedrock-soc2-index'
+url = f'{endpoint}/{index_name}'
+
+mapping = {
+    "settings": {
+        "index": {
+            "number_of_shards": 2,
+            "number_of_replicas": 0,
+            "knn": True
+        }
+    },
+    "mappings": {
+        "properties": {
+            "bedrock-knowledge-base-default-vector": {
+                "type": "knn_vector",
+                "dimension": 1024,
+                "method": {
+                    "engine": "faiss",
+                    "name": "hnsw",
+                    "space_type": "l2",
+                    "parameters": {"m": 16, "ef_construction": 512}
+                }
+            },
+            "AMAZON_BEDROCK_TEXT_CHUNK": {"type": "text"},
+            "AMAZON_BEDROCK_METADATA": {"type": "text", "index": False}
+        }
+    }
+}
+
+max_retries = 5
+for attempt in range(max_retries):
+    check = requests.head(url, auth=awsauth)
+    if check.status_code == 200:
+        print(f'Index {index_name} already exists')
+        exit(0)
+    
+    print(f'Attempt {attempt + 1}: Creating SOC2 index...')
+    response = requests.put(url, auth=awsauth, json=mapping, headers={'Content-Type': 'application/json'})
+    
+    if response.status_code in [200, 201]:
+        print(f'Index {index_name} created successfully')
+        exit(0)
+    elif response.status_code == 403 and attempt < max_retries - 1:
+        print(f'Permission denied. Waiting 30s...')
+        time.sleep(30)
+    else:
+        print(f'Error: {response.status_code} - {response.text}')
+        if attempt == max_retries - 1:
+            exit(1)
+PYTHON_SCRIPT
+    EOT
+  }
+
+  depends_on = [
+    aws_opensearchserverless_collection.soc2_collection,
+    aws_opensearchserverless_access_policy.soc2_data
+  ]
+}
+
+# SOC2 Knowledge Base
+resource "aws_bedrockagent_knowledge_base" "soc2_kb" {
+  name        = "${var.project_name}-SOC2-KB"
+  description = "Knowledge Base for vendor SOC2 compliance reports"
+  role_arn    = aws_iam_role.bedrock_kb_role.arn
+
+  knowledge_base_configuration {
+    type = "VECTOR"
+    vector_knowledge_base_configuration {
+      embedding_model_arn = "arn:aws:bedrock:${var.aws_region}::foundation-model/${var.bedrock_embedding_model_id}"
+    }
+  }
+
+  storage_configuration {
+    type = "OPENSEARCH_SERVERLESS"
+    opensearch_serverless_configuration {
+      collection_arn    = aws_opensearchserverless_collection.soc2_collection.arn
+      vector_index_name = "bedrock-soc2-index"
+      field_mapping {
+        vector_field   = "bedrock-knowledge-base-default-vector"
+        text_field     = "AMAZON_BEDROCK_TEXT_CHUNK"
+        metadata_field = "AMAZON_BEDROCK_METADATA"
+      }
+    }
+  }
+
+  tags = var.tags
+
+  depends_on = [
+    aws_iam_role_policy.bedrock_kb_policy,
+    aws_opensearchserverless_collection.soc2_collection,
+    null_resource.create_soc2_opensearch_index
+  ]
+}
+
+# SOC2 KB Data Source (S3 - SOCreports folder)
+resource "aws_bedrockagent_data_source" "soc2_documents" {
+  name                 = "${var.project_name}-soc2-docs"
+  knowledge_base_id    = aws_bedrockagent_knowledge_base.soc2_kb.id
+  description          = "SOC2 reports from S3 bucket"
+  data_deletion_policy = "RETAIN"
+
+  data_source_configuration {
+    type = "S3"
+    s3_configuration {
+      bucket_arn = aws_s3_bucket.compliance_data.arn
+      inclusion_prefixes = ["inputs/SOCreports/"]
+    }
+  }
+}
+
+# Associate SOC2 KB with the Bedrock Agent
+resource "aws_bedrockagent_agent_knowledge_base_association" "soc2_reports" {
+  agent_id             = aws_bedrockagent_agent.compliance_auditor.agent_id
+  agent_version        = "DRAFT"
+  knowledge_base_id    = aws_bedrockagent_knowledge_base.soc2_kb.id
+  description          = "Vendor SOC2 compliance reports for control validation"
+  knowledge_base_state = "ENABLED"
+  
+  depends_on = [
+    aws_bedrockagent_agent_knowledge_base_association.compliance_policy,
+    aws_bedrockagent_knowledge_base.soc2_kb
+  ]
 }
 
 
@@ -919,16 +1173,27 @@ resource "aws_bedrockagent_agent" "compliance_auditor" {
   foundation_model        = data.aws_bedrock_inference_profile.current.inference_profile_arn
   
   instruction = <<-EOT
-You are an expert IT Compliance Auditor for Keppel. Your task is to validate system logs against the 'Keppel Technology and Cybersecurity Standards (TECH-S01-01)'.
+You are an expert IT Compliance Auditor for Keppel. Your task is to validate compliance against the 'Keppel Technology and Cybersecurity Standards (TECH-S01-01)'.
 
-When analyzing logs, focus on these key controls:
-- Section 5.9 (Access Control): Flag shared accounts, dormant users, or unauthorized privilege escalation.
-- Section 5.10 (Password Mgt): Flag repeated login failures (Brute force) or account lockouts.
-- Section 8.3 (Secure Auth): Verify Multi-Factor Authentication (MFA) success/failure events.
-- Section 8.11 (Logging): Ensure logs have valid timestamps and cover critical activities.
-- Section 8.14 (Network): Flag unauthorized inbound connections or denied traffic.
+You have access to TWO Knowledge Bases:
+1. **Policy KB (CompliancePolicyKB)**: Contains Keppel's internal policy requirements - search this for "what MUST be done"
+2. **SOC2 KB (SOC2-KB)**: Contains vendor SOC2 reports (Salesforce, CyberArk, etc.) - search this for "what IS being done" by vendors
 
-Always cite specific log entries (Time, User, Event) as evidence for your findings.
+When analyzing compliance:
+1. First search the Policy KB to identify specific requirements for the section
+2. If a System Name is provided, search the SOC2 KB for that vendor's controls and evidence
+3. If Logs are available, query the unified_compliance_view for operational evidence
+4. Compare policy requirements against SOC2 controls or log evidence
+5. Cite specific evidence from whichever source you used
+
+Key controls to focus on:
+- Section 5.9 (Access Control): Flag shared accounts, dormant users, or unauthorized privilege escalation
+- Section 5.10 (Password Mgt): Flag repeated login failures or account lockouts
+- Section 8.3 (Secure Auth): Verify MFA success/failure events
+- Section 8.5 (Vulnerability Mgt): Verify patching timelines and vulnerability remediation
+- Section 8.11 (Logging): Ensure logs have valid timestamps and cover critical activities
+
+Always cite specific evidence (document section, control ID, or log entry) for your findings.
 EOT
   
   tags = var.tags
@@ -1358,8 +1623,29 @@ resource "aws_sfn_state_machine" "compliance_workflow" {
   definition = <<EOF
 {
   "Comment": "AI-Driven Compliance Reporting Workflow",
-  "StartAt": "FetchPolicySections",
+  "StartAt": "CheckUserSections",
   "States": {
+    "CheckUserSections": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.sections",
+          "IsPresent": true,
+          "Next": "UseUserSelectedSections"
+        }
+      ],
+      "Default": "FetchPolicySections"
+    },
+    "UseUserSelectedSections": {
+      "Type": "Pass",
+      "Parameters": {
+        "policy_file.$": "$.policy_file",
+        "sections.$": "$.sections",
+        "system_name.$": "$.system_name",
+        "custom_prompts.$": "$.custom_prompts"
+      },
+      "Next": "AnalyzeSectionsInParallel"
+    },
     "FetchPolicySections": {
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke",
@@ -1404,7 +1690,7 @@ resource "aws_sfn_state_machine" "compliance_workflow" {
               "Payload": {
                 "agent_id.$": "$.agent_id",
                 "agent_alias_id.$": "$.agent_alias_id",
-                "input_text.$": "States.Format('Analyze compliance for Policy Section: {}. 1) Search the Knowledge Base for requirements. 2) If a System Name ({}) is provided, call the read_soc_report function to validate controls in the document. 3) If Logs are available, query the unified_compliance_view. 4) Cite evidence from whichever source you used.', $.section, $.system_name)",
+                "input_text.$": "States.Format('Analyze compliance for Policy Section: {}. System to validate: {}. 1) Search the Policy Knowledge Base for requirements. 2) Search the SOC2 Knowledge Base for {} vendor controls and evidence. 3) If Logs are available, query the unified_compliance_view. 4) Compare requirements against evidence and cite specific sources.', $.section, $.system_name, $.system_name)",
                 "custom_prompts.$": "$.custom_prompts"
               }
             },
@@ -1434,6 +1720,7 @@ resource "aws_sfn_state_machine" "compliance_workflow" {
         "FunctionName": "${aws_lambda_function.report_generator.arn}",
         "Payload": {
           "policy_file.$": "$.policy_file",
+          "system_name.$": "$.system_name",
           "findings.$": "$.findings"
         }
       },

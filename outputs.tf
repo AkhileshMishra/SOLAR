@@ -21,18 +21,33 @@ output "athena_workgroup_name" {
 
 
 output "knowledge_base_id" {
-  description = "ID of the Bedrock Knowledge Base"
+  description = "ID of the Bedrock Knowledge Base (Policy)"
   value       = aws_bedrockagent_knowledge_base.compliance_kb.id
 }
 
 output "knowledge_base_data_source_id" {
-  description = "ID of the Knowledge Base data source"
+  description = "ID of the Knowledge Base data source (Policy)"
   value       = aws_bedrockagent_data_source.policy_documents.data_source_id
 }
 
+output "soc2_knowledge_base_id" {
+  description = "ID of the SOC2 Knowledge Base"
+  value       = aws_bedrockagent_knowledge_base.soc2_kb.id
+}
+
+output "soc2_knowledge_base_data_source_id" {
+  description = "ID of the SOC2 Knowledge Base data source"
+  value       = aws_bedrockagent_data_source.soc2_documents.data_source_id
+}
+
 output "opensearch_collection_endpoint" {
-  description = "OpenSearch Serverless collection endpoint"
+  description = "OpenSearch Serverless collection endpoint (Policy)"
   value       = aws_opensearchserverless_collection.kb_collection.collection_endpoint
+}
+
+output "soc2_opensearch_collection_endpoint" {
+  description = "OpenSearch Serverless collection endpoint (SOC2)"
+  value       = aws_opensearchserverless_collection.soc2_collection.collection_endpoint
 }
 
 output "bedrock_agent_id" {

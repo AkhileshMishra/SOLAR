@@ -304,6 +304,35 @@ jobs:
           echo "✓ Agent prepared successfully"
 
       # ----------------------------------------
+      # 12.6 Sync Knowledge Bases
+      # ----------------------------------------
+      - name: Sync Knowledge Bases
+        run: |
+          # Sync Policy KB
+          POLICY_KB_ID=$(terraform output -raw knowledge_base_id)
+          POLICY_DS_ID=$(terraform output -raw knowledge_base_data_source_id)
+          
+          echo "Syncing Policy Knowledge Base: $POLICY_KB_ID"
+          aws bedrock-agent start-ingestion-job \
+            --knowledge-base-id $POLICY_KB_ID \
+            --data-source-id $POLICY_DS_ID \
+            --region ${{ env.AWS_REGION }} || echo "Policy KB sync skipped (may already be running)"
+          
+          # Sync SOC2 KB
+          SOC2_KB_ID=$(terraform output -raw soc2_knowledge_base_id 2>/dev/null || echo "")
+          SOC2_DS_ID=$(terraform output -raw soc2_knowledge_base_data_source_id 2>/dev/null || echo "")
+          
+          if [ -n "$SOC2_KB_ID" ] && [ -n "$SOC2_DS_ID" ]; then
+            echo "Syncing SOC2 Knowledge Base: $SOC2_KB_ID"
+            aws bedrock-agent start-ingestion-job \
+              --knowledge-base-id $SOC2_KB_ID \
+              --data-source-id $SOC2_DS_ID \
+              --region ${{ env.AWS_REGION }} || echo "SOC2 KB sync skipped (may already be running)"
+          fi
+          
+          echo "✓ Knowledge Base sync jobs started"
+
+      # ----------------------------------------
       # 13. Get Terraform Outputs
       # ----------------------------------------
       - name: Get Terraform Outputs
