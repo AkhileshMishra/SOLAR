@@ -945,10 +945,10 @@ resource "aws_lambda_permission" "allow_s3_invocation" {
   source_arn    = aws_s3_bucket.compliance_data.arn
 }
 
-resource "aws_lambda_permission" "allow_s3_policy_indexer" {
+resource "aws_lambda_permission" "allow_s3_policy_trigger" {
   statement_id  = "AllowExecutionFromS3Policy"
   action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.policy_indexer.function_name
+  function_name = aws_lambda_function.policy_section_fetcher.function_name
   principal     = "s3.amazonaws.com"
   source_arn    = aws_s3_bucket.compliance_data.arn
 }
@@ -963,7 +963,7 @@ resource "aws_s3_bucket_notification" "log_upload_trigger" {
   }
   
   lambda_function {
-    lambda_function_arn = aws_lambda_function.policy_indexer.arn
+    lambda_function_arn = aws_lambda_function.policy_section_fetcher.arn
     events              = ["s3:ObjectCreated:*"]
     filter_prefix       = "inputs/policy/"
     filter_suffix       = ".pdf"
@@ -971,12 +971,12 @@ resource "aws_s3_bucket_notification" "log_upload_trigger" {
   
   depends_on = [
     aws_lambda_permission.allow_s3_invocation,
-    aws_lambda_permission.allow_s3_policy_indexer
+    aws_lambda_permission.allow_s3_policy_trigger
   ]
 }
 
 ################################################################################
-# Policy Sections DynamoDB Table & Indexer Lambda
+# Policy Sections DynamoDB Cache
 ################################################################################
 
 resource "aws_dynamodb_table" "policy_sections" {
@@ -987,76 +987,6 @@ resource "aws_dynamodb_table" "policy_sections" {
   attribute {
     name = "policy_file"
     type = "S"
-  }
-
-  tags = var.tags
-}
-
-resource "aws_iam_role" "policy_indexer" {
-  name = "${var.project_name}-policy-indexer-role"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Action = "sts:AssumeRole"
-      Effect = "Allow"
-      Principal = { Service = "lambda.amazonaws.com" }
-    }]
-  })
-}
-
-resource "aws_iam_role_policy" "policy_indexer" {
-  name = "${var.project_name}-policy-indexer-policy"
-  role = aws_iam_role.policy_indexer.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect   = "Allow"
-        Action   = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
-        Resource = "arn:aws:logs:*:*:*"
-      },
-      {
-        Effect   = "Allow"
-        Action   = ["s3:GetObject"]
-        Resource = "${aws_s3_bucket.compliance_data.arn}/inputs/policy/*"
-      },
-      {
-        Effect   = "Allow"
-        Action   = ["dynamodb:PutItem", "dynamodb:GetItem"]
-        Resource = aws_dynamodb_table.policy_sections.arn
-      },
-      {
-        Effect   = "Allow"
-        Action   = ["bedrock:InvokeModel"]
-        Resource = "*"
-      }
-    ]
-  })
-}
-
-data "archive_file" "policy_indexer" {
-  type        = "zip"
-  source_dir  = "${path.module}/src/policy_indexer"
-  output_path = "${path.module}/dist/policy_indexer.zip"
-}
-
-resource "aws_lambda_function" "policy_indexer" {
-  filename         = data.archive_file.policy_indexer.output_path
-  function_name    = "${var.project_name}-policy-indexer"
-  role             = aws_iam_role.policy_indexer.arn
-  handler          = "lambda_function.lambda_handler"
-  source_code_hash = data.archive_file.policy_indexer.output_base64sha256
-  runtime          = "python3.11"
-  timeout          = 120
-  memory_size      = 512
-
-  environment {
-    variables = {
-      DYNAMODB_TABLE   = aws_dynamodb_table.policy_sections.name
-      BEDROCK_MODEL_ID = var.bedrock_model_id
-    }
   }
 
   tags = var.tags
@@ -1419,7 +1349,8 @@ resource "aws_iam_role_policy" "policy_section_fetcher" {
       {
         Effect = "Allow"
         Action = [
-          "dynamodb:GetItem"
+          "dynamodb:GetItem",
+          "dynamodb:PutItem"
         ]
         Resource = aws_dynamodb_table.policy_sections.arn
       },
