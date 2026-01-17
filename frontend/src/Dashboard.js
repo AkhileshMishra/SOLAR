@@ -255,16 +255,20 @@ const Dashboard = ({ user, signOut }) => {
           setCurrentStage(3);
           setProgressMessage('Report generated successfully!');
           const output = JSON.parse(statusData.output);
-          const s3Key = output.report_location.replace(`s3://${BUCKET_NAME}/`, '');
-          setReportUrl(getPresignedUrl(s3Key));
+          const docxKey = output.report_location.replace(`s3://${BUCKET_NAME}/`, '');
+          const htmlKey = output.html_key; // New: HTML key from Lambda
+          
+          setReportUrl(getPresignedUrl(docxKey));
           setStatus('Report Generated Successfully!');
           setLoading(false);
           
           // Save to history
-          await saveAuditHistory(s3Key, selectedSections.map(s => s.section), prompts);
+          await saveAuditHistory(docxKey, selectedSections.map(s => s.section), prompts);
           
-          // Fetch report content for display
-          await fetchReportContent(s3Key);
+          // Fetch HTML report content for display
+          if (htmlKey) {
+            await fetchReportContent(htmlKey);
+          }
           
           isRunning = false;
           // Close modal and show report view
@@ -351,22 +355,6 @@ const Dashboard = ({ user, signOut }) => {
     return new Date(isoString).toLocaleString();
   };
 
-  // Convert markdown-like content to basic HTML for display
-  const renderReportContent = (content) => {
-    if (!content) return null;
-    
-    // Basic markdown to HTML conversion
-    let html = content
-      .replace(/^### (.*$)/gim, '<h3>$1</h3>')
-      .replace(/^## (.*$)/gim, '<h2>$1</h2>')
-      .replace(/^# (.*$)/gim, '<h1>$1</h1>')
-      .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-      .replace(/\*(.*?)\*/g, '<em>$1</em>')
-      .replace(/\n/g, '<br/>');
-    
-    return <div dangerouslySetInnerHTML={{ __html: html }} />;
-  };
-
   return (
     <Box sx={{ flexGrow: 1 }}>
       <AppBar position="static">
@@ -391,34 +379,25 @@ const Dashboard = ({ user, signOut }) => {
         {/* REPORT VIEW */}
         {showReportView && (
           <Paper sx={{ p: 3, mb: 3 }}>
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
               <Typography variant="h5">📋 Compliance Report</Typography>
-              <Box sx={{ display: 'flex', gap: 1 }}>
-                <Button variant="contained" href={reportUrl} target="_blank" startIcon={<DownloadIcon />}>
-                  Download
-                </Button>
-              </Box>
-            </Box>
-
-            <Box sx={{ mb: 2, p: 2, backgroundColor: '#f5f5f5', borderRadius: 1 }}>
-              <Typography variant="body2"><strong>Policy:</strong> {selectedPolicy}</Typography>
-              <Typography variant="body2"><strong>System:</strong> {selectedSystem}</Typography>
-              <Typography variant="body2"><strong>Sections:</strong> {selectedSections.map(s => s.section).join(', ')}</Typography>
+              <Button variant="contained" href={reportUrl} target="_blank" startIcon={<DownloadIcon />}>
+                Download DOCX
+              </Button>
             </Box>
 
             <Paper 
               variant="outlined" 
               sx={{ 
-                p: 3, 
+                p: 0, 
                 maxHeight: '60vh', 
                 overflow: 'auto',
-                backgroundColor: '#fafafa',
-                fontFamily: 'inherit',
-                '& h1, & h2, & h3': { marginTop: 2, marginBottom: 1 },
-                '& strong': { color: '#1976d2' }
+                backgroundColor: '#fff'
               }}
             >
-              {reportContent ? renderReportContent(reportContent) : (
+              {reportContent ? (
+                <div dangerouslySetInnerHTML={{ __html: reportContent }} />
+              ) : (
                 <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
                   <CircularProgress />
                 </Box>
