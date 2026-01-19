@@ -131,13 +131,17 @@ def create_html_report(policy_file, system_name, findings):
     for idx, f in enumerate(findings, 1):
         section = f.get('section', 'Unknown')
         status = f.get('compliance_status', 'PARTIALLY_COMPLIANT')
+        user_query = f.get('user_query', '')
         analysis = f.get('analysis', 'No analysis provided')
         analysis = analysis.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+        
+        query_html = f'<p><strong>Query:</strong> {user_query}</p>' if user_query else ''
         
         html += f"""
         <div class="finding">
             <h3>{idx}. {section}</h3>
             <span class="status {status}">{status.replace('_', ' ')}</span>
+            {query_html}
             <h4>Analysis</h4>
             <div class="analysis">{analysis}</div>
         </div>
@@ -199,11 +203,14 @@ def add_detailed_findings(doc, findings):
     for idx, finding in enumerate(findings, 1):
         section = finding.get('section', 'Unknown Section')
         status = finding.get('compliance_status', 'PARTIALLY_COMPLIANT').replace('_', ' ')
+        user_query = finding.get('user_query', '')
         analysis = finding.get('analysis', 'No analysis provided')
         
         doc.add_heading(f"{idx}. {section}", 2)
         status_para = doc.add_paragraph()
         status_para.add_run(f"Status: {status}").bold = True
+        if user_query:
+            doc.add_paragraph(f"Query: {user_query}")
         doc.add_heading('Analysis', 3)
         doc.add_paragraph(analysis)
         doc.add_paragraph()

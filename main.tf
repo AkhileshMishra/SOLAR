@@ -1675,8 +1675,23 @@ client = boto3.client('bedrock-agent-runtime')
 def lambda_handler(event, context):
     agent_id = event['agent_id']
     alias_id = event['agent_alias_id']
-    input_text = event['input_text']
+    section = event.get('section', '')
+    system_name = event.get('system_name', '')
+    custom_prompts = event.get('custom_prompts', [])
     session_id = event.get('session_id', str(uuid.uuid4()))
+    
+    # Find custom prompt for this section
+    user_prompt = ''
+    for p in custom_prompts:
+        if p.get('section') == section:
+            user_prompt = p.get('prompt', '')
+            break
+    
+    # Build input text - prioritize user's specific query if provided
+    if user_prompt:
+        input_text = f"Analyze compliance for Policy Section: {section}. System: {system_name}. USER'S SPECIFIC QUERY: {user_prompt}. Focus your analysis on answering this specific query. Search Knowledge Bases for evidence and query logs if available."
+    else:
+        input_text = f"Analyze compliance for Policy Section: {section}. System to validate: {system_name}. 1) Search the Policy Knowledge Base for requirements. 2) Search the SOC2 Knowledge Base for {system_name} vendor controls and evidence. 3) If Logs are available, query the unified_compliance_view. 4) Compare requirements against evidence and cite specific sources."
 
     response = client.invoke_agent(
         agentId=agent_id,
@@ -1691,7 +1706,7 @@ def lambda_handler(event, context):
         if 'chunk' in event:
             completion += event['chunk']['bytes'].decode('utf-8')
             
-    return {'completion': completion}
+    return {'completion': completion, 'user_prompt': user_prompt}
 EOF
     filename = "index.py"
   }
@@ -1762,8 +1777,19 @@ resource "aws_sfn_state_machine" "compliance_workflow" {
         "agent_alias_id": "${aws_bedrockagent_agent_alias.compliance_auditor_prod.agent_alias_id}"
       },
       "Iterator": {
-        "StartAt": "AnalyzeSection",
+        "StartAt": "GetSectionPrompt",
         "States": {
+          "GetSectionPrompt": {
+            "Type": "Pass",
+            "Parameters": {
+              "section.$": "$.section",
+              "system_name.$": "$.system_name",
+              "agent_id.$": "$.agent_id",
+              "agent_alias_id.$": "$.agent_alias_id",
+              "custom_prompts.$": "$.custom_prompts"
+            },
+            "Next": "AnalyzeSection"
+          },
           "AnalyzeSection": {
             "Type": "Task",
             "Resource": "arn:aws:states:::lambda:invoke",
@@ -1772,7 +1798,8 @@ resource "aws_sfn_state_machine" "compliance_workflow" {
               "Payload": {
                 "agent_id.$": "$.agent_id",
                 "agent_alias_id.$": "$.agent_alias_id",
-                "input_text.$": "States.Format('Analyze compliance for Policy Section: {}. System to validate: {}. 1) Search the Policy Knowledge Base for requirements. 2) Search the SOC2 Knowledge Base for {} vendor controls and evidence. 3) If Logs are available, query the unified_compliance_view. 4) Compare requirements against evidence and cite specific sources.', $.section, $.system_name, $.system_name)",
+                "section.$": "$.section",
+                "system_name.$": "$.system_name",
                 "custom_prompts.$": "$.custom_prompts"
               }
             },
@@ -1783,11 +1810,9 @@ resource "aws_sfn_state_machine" "compliance_workflow" {
             "Type": "Pass",
             "Parameters": {
               "section.$": "$.section",
+              "user_query.$": "$.agent_response.Payload.user_prompt",
               "analysis.$": "$.agent_response.Payload.completion",
-              "compliance_status": "REQUIRES_REVIEW",
-              "risk_level": "MEDIUM",
-              "evidence": [],
-              "recommendation": "Review agent analysis for detailed recommendations"
+              "compliance_status": "REQUIRES_REVIEW"
             },
             "End": true
           }
