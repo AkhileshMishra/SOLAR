@@ -1586,6 +1586,7 @@ resource "aws_iam_role_policy" "step_functions" {
         Resource = [
           aws_lambda_function.policy_section_fetcher.arn,
           aws_lambda_function.report_generator.arn,
+          aws_lambda_function.pair_builder.arn,
           "arn:aws:lambda:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:function:${var.project_name}-agent-invoker"
         ]
       },
