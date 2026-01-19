@@ -1661,6 +1661,38 @@ resource "aws_lambda_function" "agent_invoker" {
   source_code_hash = data.archive_file.agent_invoker_zip.output_base64sha256
 }
 
+resource "aws_lambda_function" "pair_builder" {
+  function_name = "${var.project_name}-pair-builder"
+  role          = aws_iam_role.agent_invoker.arn
+  runtime       = "python3.11"
+  handler       = "index.lambda_handler"
+  timeout       = 10
+
+  filename      = data.archive_file.pair_builder_zip.output_path
+  source_code_hash = data.archive_file.pair_builder_zip.output_base64sha256
+}
+
+data "archive_file" "pair_builder_zip" {
+  type        = "zip"
+  output_path = "${path.module}/.terraform/lambda/pair_builder.zip"
+  source {
+    content  = <<EOF
+def lambda_handler(event, context):
+    sections = event.get('sections', [])
+    systems = event.get('systems', [])
+    
+    # Build all section+system pairs
+    pairs = []
+    for section in sections:
+        for system in systems:
+            pairs.append({'section': section, 'system': system})
+    
+    return {'pairs': pairs, 'count': len(pairs)}
+EOF
+    filename = "index.py"
+  }
+}
+
 data "archive_file" "agent_invoker_zip" {
   type        = "zip"
   output_path = "${path.module}/.terraform/lambda/agent_invoker.zip"
@@ -1740,9 +1772,92 @@ resource "aws_sfn_state_machine" "compliance_workflow" {
         "policy_file.$": "$.policy_file",
         "sections.$": "$.sections",
         "system_name.$": "$.system_name",
+        "systems.$": "$.systems",
         "custom_prompts.$": "$.custom_prompts"
       },
-      "Next": "AnalyzeSectionsInParallel"
+      "Next": "CheckMultipleSystems"
+    },
+    "CheckMultipleSystems": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.systems",
+          "IsPresent": true,
+          "Next": "BuildSectionSystemPairs"
+        }
+      ],
+      "Default": "AnalyzeSectionsInParallel"
+    },
+    "BuildSectionSystemPairs": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${aws_lambda_function.pair_builder.arn}",
+        "Payload": {
+          "sections.$": "$.sections",
+          "systems.$": "$.systems"
+        }
+      },
+      "ResultPath": "$.pairs_result",
+      "Next": "AnalyzePairsInParallel"
+    },
+    "AnalyzePairsInParallel": {
+      "Type": "Map",
+      "ItemsPath": "$.pairs_result.Payload.pairs",
+      "MaxConcurrency": 5,
+      "ResultPath": "$.findings",
+      "Parameters": {
+        "section.$": "$$.Map.Item.Value.section",
+        "system_name.$": "$$.Map.Item.Value.system",
+        "policy_file.$": "$.policy_file",
+        "custom_prompts.$": "$.custom_prompts",
+        "agent_id": "${aws_bedrockagent_agent.compliance_auditor.agent_id}",
+        "agent_alias_id": "${aws_bedrockagent_agent_alias.compliance_auditor_prod.agent_alias_id}"
+      },
+      "Iterator": {
+        "StartAt": "GetSectionPromptPair",
+        "States": {
+          "GetSectionPromptPair": {
+            "Type": "Pass",
+            "Parameters": {
+              "section.$": "$.section",
+              "system_name.$": "$.system_name",
+              "agent_id.$": "$.agent_id",
+              "agent_alias_id.$": "$.agent_alias_id",
+              "custom_prompts.$": "$.custom_prompts"
+            },
+            "Next": "AnalyzeSectionPair"
+          },
+          "AnalyzeSectionPair": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Parameters": {
+              "FunctionName": "${aws_lambda_function.agent_invoker.arn}",
+              "Payload": {
+                "agent_id.$": "$.agent_id",
+                "agent_alias_id.$": "$.agent_alias_id",
+                "section.$": "$.section",
+                "system_name.$": "$.system_name",
+                "custom_prompts.$": "$.custom_prompts"
+              }
+            },
+            "ResultPath": "$.agent_response",
+            "Next": "FormatFindingPair"
+          },
+          "FormatFindingPair": {
+            "Type": "Pass",
+            "Parameters": {
+              "section.$": "$.section",
+              "system_name.$": "$.system_name",
+              "user_query.$": "$.agent_response.Payload.user_prompt",
+              "analysis.$": "$.agent_response.Payload.completion",
+              "compliance_status": "REQUIRES_REVIEW"
+            },
+            "End": true
+          }
+        }
+      },
+      "Next": "GenerateReport"
     },
     "FetchPolicySections": {
       "Type": "Task",

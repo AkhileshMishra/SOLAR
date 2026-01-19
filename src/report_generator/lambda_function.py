@@ -68,7 +68,14 @@ def lambda_handler(event, context):
 
 def create_html_report(policy_file, system_name, findings):
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')
-    sections_list = ", ".join([f.get('section', 'Unknown') for f in findings])
+    
+    # Group findings by system
+    findings_by_system = {}
+    for f in findings:
+        sys = f.get('system_name', system_name) or 'General'
+        if sys not in findings_by_system:
+            findings_by_system[sys] = []
+        findings_by_system[sys].append(f)
     
     html = f"""<!DOCTYPE html>
 <html>
@@ -83,6 +90,8 @@ def create_html_report(policy_file, system_name, findings):
         h3 {{ color: #555; }}
         .meta {{ background: #e3f2fd; padding: 15px; border-radius: 4px; margin: 20px 0; }}
         .meta p {{ margin: 5px 0; }}
+        .system-section {{ border: 1px solid #ddd; border-radius: 8px; padding: 20px; margin: 20px 0; }}
+        .system-header {{ background: #1976d2; color: white; padding: 10px 15px; margin: -20px -20px 20px -20px; border-radius: 8px 8px 0 0; }}
         .finding {{ background: #fafafa; border-left: 4px solid #1976d2; padding: 15px; margin: 20px 0; border-radius: 0 4px 4px 0; }}
         .status {{ font-weight: bold; padding: 5px 10px; border-radius: 4px; display: inline-block; margin: 10px 0; }}
         .status.COMPLIANT {{ background: #c8e6c9; color: #2e7d32; }}
@@ -101,51 +110,52 @@ def create_html_report(policy_file, system_name, findings):
         
         <div class="meta">
             <p><strong>Policy Document:</strong> {policy_file}</p>
-            <p><strong>System Validated:</strong> {system_name or 'N/A'}</p>
+            <p><strong>Systems Validated:</strong> {', '.join(findings_by_system.keys())}</p>
             <p><strong>Report Generated:</strong> {timestamp}</p>
-            <p><strong>Sections Audited:</strong> {len(findings)}</p>
+            <p><strong>Total Findings:</strong> {len(findings)}</p>
         </div>
         
         <h2>Executive Summary</h2>
-        <p>This compliance audit analyzed {len(findings)} policy section(s): {sections_list}.</p>
-        {f'<p>The analysis validated controls against {system_name} SOC2 report and available system logs.</p>' if system_name else ''}
+        <p>This compliance audit analyzed {len(findings)} finding(s) across {len(findings_by_system)} system(s).</p>
         
-        <h2>Sections Overview</h2>
+        <h2>Overview by System</h2>
         <table>
-            <tr><th>Section</th><th>Status</th></tr>
+            <tr><th>System</th><th>Sections Audited</th></tr>
 """
     
-    for f in findings:
-        status = f.get('compliance_status', 'PARTIALLY_COMPLIANT')
-        html += f"""            <tr>
-                <td>{f.get('section', 'Unknown')}</td>
-                <td><span class="status {status}">{status.replace('_', ' ')}</span></td>
-            </tr>
-"""
+    for sys, sys_findings in findings_by_system.items():
+        sections = ", ".join([f.get('section', 'Unknown') for f in sys_findings])
+        html += f"            <tr><td>{sys}</td><td>{sections}</td></tr>\n"
     
     html += """        </table>
         
         <h2>Detailed Findings</h2>
 """
     
-    for idx, f in enumerate(findings, 1):
-        section = f.get('section', 'Unknown')
-        status = f.get('compliance_status', 'PARTIALLY_COMPLIANT')
-        user_query = f.get('user_query', '')
-        analysis = f.get('analysis', 'No analysis provided')
-        analysis = analysis.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-        
-        query_html = f'<p><strong>Query:</strong> {user_query}</p>' if user_query else ''
-        
+    for sys, sys_findings in findings_by_system.items():
         html += f"""
-        <div class="finding">
-            <h3>{idx}. {section}</h3>
-            <span class="status {status}">{status.replace('_', ' ')}</span>
-            {query_html}
-            <h4>Analysis</h4>
-            <div class="analysis">{analysis}</div>
-        </div>
+        <div class="system-section">
+            <div class="system-header"><strong>System: {sys}</strong></div>
 """
+        for idx, f in enumerate(sys_findings, 1):
+            section = f.get('section', 'Unknown')
+            status = f.get('compliance_status', 'PARTIALLY_COMPLIANT')
+            user_query = f.get('user_query', '')
+            analysis = f.get('analysis', 'No analysis provided')
+            analysis = analysis.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+            
+            query_html = f'<p><strong>Query:</strong> {user_query}</p>' if user_query else ''
+            
+            html += f"""
+            <div class="finding">
+                <h3>{idx}. {section}</h3>
+                <span class="status {status}">{status.replace('_', ' ')}</span>
+                {query_html}
+                <h4>Analysis</h4>
+                <div class="analysis">{analysis}</div>
+            </div>
+"""
+        html += "        </div>\n"
     
     html += """
     </div>
@@ -170,50 +180,67 @@ def create_compliance_report(policy_file, system_name, findings):
     
     add_executive_summary(doc, findings, system_name)
     doc.add_page_break()
-    add_detailed_findings(doc, findings)
+    add_detailed_findings(doc, findings, system_name)
     
     return doc
 
 
 def add_executive_summary(doc, findings, system_name):
     doc.add_heading('Executive Summary', 1)
-    sections_list = ", ".join([f.get('section', 'Unknown') for f in findings])
-    summary = f"This compliance audit analyzed {len(findings)} policy section(s): {sections_list}."
-    if system_name:
-        summary += f" The analysis validated controls against {system_name} SOC2 report and available system logs."
+    
+    # Group by system
+    findings_by_system = {}
+    for f in findings:
+        sys = f.get('system_name', system_name) or 'General'
+        if sys not in findings_by_system:
+            findings_by_system[sys] = []
+        findings_by_system[sys].append(f)
+    
+    systems_str = ', '.join(findings_by_system.keys())
+    summary = f"This compliance audit analyzed {len(findings)} finding(s) across {len(findings_by_system)} system(s): {systems_str}."
     doc.add_paragraph(summary)
     doc.add_paragraph()
     
-    doc.add_heading('Sections Analyzed', 2)
+    doc.add_heading('Overview by System', 2)
     table = doc.add_table(rows=1, cols=2)
     table.style = 'Light Grid Accent 1'
     header = table.rows[0].cells
-    header[0].text = 'Section'
-    header[1].text = 'Status'
+    header[0].text = 'System'
+    header[1].text = 'Sections Audited'
     
-    for finding in findings:
+    for sys, sys_findings in findings_by_system.items():
         row = table.add_row().cells
-        row[0].text = finding.get('section', 'Unknown')
-        row[1].text = finding.get('compliance_status', 'PARTIALLY_COMPLIANT').replace('_', ' ')
+        row[0].text = sys
+        row[1].text = ', '.join([f.get('section', 'Unknown') for f in sys_findings])
 
 
-def add_detailed_findings(doc, findings):
+def add_detailed_findings(doc, findings, system_name=''):
     doc.add_heading('Detailed Findings', 1)
     
-    for idx, finding in enumerate(findings, 1):
-        section = finding.get('section', 'Unknown Section')
-        status = finding.get('compliance_status', 'PARTIALLY_COMPLIANT').replace('_', ' ')
-        user_query = finding.get('user_query', '')
-        analysis = finding.get('analysis', 'No analysis provided')
+    # Group by system
+    findings_by_system = {}
+    for f in findings:
+        sys = f.get('system_name', system_name) or 'General'
+        if sys not in findings_by_system:
+            findings_by_system[sys] = []
+        findings_by_system[sys].append(f)
+    
+    for sys, sys_findings in findings_by_system.items():
+        doc.add_heading(f"System: {sys}", 2)
         
-        doc.add_heading(f"{idx}. {section}", 2)
-        status_para = doc.add_paragraph()
-        status_para.add_run(f"Status: {status}").bold = True
-        if user_query:
-            doc.add_paragraph(f"Query: {user_query}")
-        doc.add_heading('Analysis', 3)
-        doc.add_paragraph(analysis)
-        doc.add_paragraph()
+        for idx, finding in enumerate(sys_findings, 1):
+            section = finding.get('section', 'Unknown Section')
+            status = finding.get('compliance_status', 'PARTIALLY_COMPLIANT').replace('_', ' ')
+            user_query = finding.get('user_query', '')
+            analysis = finding.get('analysis', 'No analysis provided')
+            
+            doc.add_heading(f"{idx}. {section}", 3)
+            status_para = doc.add_paragraph()
+            status_para.add_run(f"Status: {status}").bold = True
+            if user_query:
+                doc.add_paragraph(f"Query: {user_query}")
+            doc.add_paragraph(analysis)
+            doc.add_paragraph()
 
 
 def generate_report_filename(policy_file, system_name, ext):

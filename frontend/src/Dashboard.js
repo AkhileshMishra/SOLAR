@@ -311,11 +311,13 @@ const Dashboard = ({ user, signOut }) => {
     const stepfunctions = new StepFunctions();
     try {
       const prompts = selectedSections.map(s => ({ section: s.section, prompt: s.prompt }));
+      const systemsToAudit = selectedSystem === 'ALL_SYSTEMS' ? systems : [selectedSystem];
       const result = await stepfunctions.startExecution({
         stateMachineArn: STEP_FUNCTION_ARN,
         input: JSON.stringify({
           policy_file: selectedPolicy,
-          system_name: selectedSystem,
+          system_name: selectedSystem === 'ALL_SYSTEMS' ? 'All Systems' : selectedSystem,
+          systems: systemsToAudit,
           sections: selectedSections.map(s => s.section),
           custom_prompts: prompts
         })
@@ -449,6 +451,7 @@ const Dashboard = ({ user, signOut }) => {
                 displayEmpty sx={{ mb: 3 }}
               >
                 <MenuItem value="" disabled>Select System (e.g. CyberArk)...</MenuItem>
+                <MenuItem value="ALL_SYSTEMS">All Systems</MenuItem>
                 {systems.map(s => <MenuItem key={s} value={s}>{s}</MenuItem>)}
               </Select>
 
