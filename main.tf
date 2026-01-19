@@ -1687,11 +1687,12 @@ def lambda_handler(event, context):
             user_prompt = p.get('prompt', '')
             break
     
-    # Build input text - prioritize user's specific query if provided
+    # Base prompt always used
+    input_text = f"Analyze compliance for Policy Section: {section}. System to validate: {system_name}. 1) Search the Policy Knowledge Base for requirements. 2) Search the SOC2 Knowledge Base for {system_name} vendor controls and evidence. 3) If Logs are available, query the unified_compliance_view. 4) Compare requirements against evidence and cite specific sources."
+    
+    # Append user's specific focus if provided
     if user_prompt:
-        input_text = f"Analyze compliance for Policy Section: {section}. System: {system_name}. USER'S SPECIFIC QUERY: {user_prompt}. Focus your analysis on answering this specific query. Search Knowledge Bases for evidence and query logs if available."
-    else:
-        input_text = f"Analyze compliance for Policy Section: {section}. System to validate: {system_name}. 1) Search the Policy Knowledge Base for requirements. 2) Search the SOC2 Knowledge Base for {system_name} vendor controls and evidence. 3) If Logs are available, query the unified_compliance_view. 4) Compare requirements against evidence and cite specific sources."
+        input_text += f" ADDITIONAL USER FOCUS: {user_prompt}. Prioritize this specific aspect in your analysis."
 
     response = client.invoke_agent(
         agentId=agent_id,
