@@ -132,23 +132,40 @@ def parse_analysis(analysis_text):
     result['gaps_identified'] = try_patterns(gaps_patterns, text)
     result['recommendation'] = try_patterns(recommendation_patterns, text)
     
-    # If gaps section is empty but assessment mentions gaps, extract them
-    if not result['gaps_identified'] or result['gaps_identified'].lower() in ['no gaps identified', 'none']:
-        assessment = result['compliance_assessment'].lower()
-        if 'gap' in assessment or 'missing' in assessment or 'no soc2' in assessment or 'not available' in assessment:
-            # Extract gap-related content from assessment
-            gap_match = re.search(r'((?:critical\s*)?gap[s]?[:\s].+?)(?=recommendation|$)', result['compliance_assessment'], re.IGNORECASE | re.DOTALL)
-            if gap_match:
-                result['gaps_identified'] = gap_match.group(1).strip()
+    # Clean up extracted text - remove leading ** or other artifacts
+    for key in result:
+        if result[key]:
+            result[key] = re.sub(r'^[\s\*]+', '', result[key]).strip()
+            result[key] = re.sub(r'[\s\*]+$', '', result[key]).strip()
+    
+    # Detect if SOC2 evidence is actually missing (even if section has text)
+    soc2_missing_indicators = [
+        'not present', 'not found', 'no specific', 'did not return', 
+        'no soc2 report', 'unable to', 'not available', 'no evidence'
+    ]
+    soc2_text = (result['soc2_evidence'] or '').lower()
+    soc2_actually_missing = any(ind in soc2_text for ind in soc2_missing_indicators) or not result['soc2_evidence']
+    
+    # Detect if logs are actually missing
+    logs_missing_indicators = [
+        'no log', 'not available', 'no unified', 'empty', 'does not exist',
+        'no operational', 'not found', 'no evidence'
+    ]
+    logs_text = (result['logs_evidence'] or '').lower()
+    logs_actually_missing = any(ind in logs_text for ind in logs_missing_indicators) or not result['logs_evidence']
     
     # Auto-generate gaps if evidence is missing
     gaps_list = []
-    if not result['soc2_evidence'] or 'not present' in result['soc2_evidence'].lower() or 'not found' in result['soc2_evidence'].lower():
+    if soc2_actually_missing:
         gaps_list.append("No SOC2 report available for this system")
-    if not result['logs_evidence'] or 'no log' in result['logs_evidence'].lower() or 'not available' in result['logs_evidence'].lower():
+    if logs_actually_missing:
         gaps_list.append("No operational logs available for verification")
     
-    if gaps_list and (not result['gaps_identified'] or result['gaps_identified'].lower() in ['no gaps identified', 'none']):
+    # Check if current gaps is empty or just says "no gaps"
+    current_gaps = (result['gaps_identified'] or '').lower().strip()
+    gaps_empty = not current_gaps or current_gaps in ['no gaps identified', 'none', 'no gaps']
+    
+    if gaps_list and gaps_empty:
         result['gaps_identified'] = '\n'.join(f"{i+1}. {g}" for i, g in enumerate(gaps_list))
     
     # If parsing failed, put full analysis in policy_requirements
