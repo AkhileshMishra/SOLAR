@@ -80,20 +80,55 @@ def parse_analysis(analysis_text):
     
     text = analysis_text or ''
     
-    # Extract sections using exact headings from agent instruction
-    patterns = {
-        'policy_requirements': r'POLICY REQUIREMENTS IDENTIFIED:\s*(.+?)(?=SOC2:|LOGS:|COMPLIANCE ASSESSMENT:|GAPS IDENTIFIED:|RECOMMENDATION:|$)',
-        'soc2_evidence': r'SOC2:\s*(.+?)(?=LOGS:|COMPLIANCE ASSESSMENT:|GAPS IDENTIFIED:|RECOMMENDATION:|$)',
-        'logs_evidence': r'LOGS:\s*(.+?)(?=COMPLIANCE ASSESSMENT:|GAPS IDENTIFIED:|RECOMMENDATION:|$)',
-        'compliance_assessment': r'COMPLIANCE ASSESSMENT:\s*(.+?)(?=GAPS IDENTIFIED:|RECOMMENDATION:|$)',
-        'gaps_identified': r'GAPS IDENTIFIED:\s*(.+?)(?=RECOMMENDATION:|$)',
-        'recommendation': r'RECOMMENDATION:\s*(.+?)$'
-    }
+    # Multiple pattern variations to handle agent response formats
+    policy_patterns = [
+        r'POLICY REQUIREMENTS IDENTIFIED:\s*(.+?)(?=SOC2:|LOGS:|COMPLIANCE|GAPS|RECOMMENDATION|$)',
+        r'\*\*POLICY REQUIREMENTS[^*]*\*\*[:\s]*(.+?)(?=\*\*SOC2|\*\*EVIDENCE|\*\*COMPLIANCE|\*\*GAPS|\*\*RECOMMENDATION|\*\*NOTE|$)',
+        r'POLICY REQUIREMENTS[^:]*:\s*(.+?)(?=SOC2|EVIDENCE|COMPLIANCE|GAPS|RECOMMENDATION|NOTE|$)'
+    ]
     
-    for key, pattern in patterns.items():
-        match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
-        if match:
-            result[key] = match.group(1).strip()
+    soc2_patterns = [
+        r'SOC2:\s*(.+?)(?=LOGS:|COMPLIANCE|GAPS|RECOMMENDATION|$)',
+        r'\*\*[^*]*SOC2[^*]*\*\*[:\s]*(.+?)(?=\*\*LOG|\*\*COMPLIANCE|\*\*GAPS|\*\*RECOMMENDATION|\*\*NOTE|$)',
+        r'SOC2[^:]*(?:EVIDENCE|CONTROLS)[^:]*:\s*(.+?)(?=LOG|COMPLIANCE|GAPS|RECOMMENDATION|NOTE|$)'
+    ]
+    
+    logs_patterns = [
+        r'LOGS:\s*(.+?)(?=COMPLIANCE|GAPS|RECOMMENDATION|$)',
+        r'\*\*LOG[^*]*\*\*[:\s]*(.+?)(?=\*\*COMPLIANCE|\*\*GAPS|\*\*RECOMMENDATION|$)',
+        r'\*\*NOTE ON LOG[^*]*\*\*[:\s]*(.+?)(?=\*\*COMPLIANCE|\*\*GAPS|\*\*RECOMMENDATION|$)'
+    ]
+    
+    assessment_patterns = [
+        r'COMPLIANCE ASSESSMENT:\s*(.+?)(?=GAPS|RECOMMENDATION|$)',
+        r'\*\*COMPLIANCE[^*]*\*\*[:\s]*(.+?)(?=\*\*GAPS|\*\*RECOMMENDATION|\*\*NOTE|$)',
+        r'COMPLIANCE ASSESSMENT[^:]*:\s*(.+?)(?=GAPS|RECOMMENDATION|NOTE|$)'
+    ]
+    
+    gaps_patterns = [
+        r'GAPS IDENTIFIED:\s*(.+?)(?=RECOMMENDATION|$)',
+        r'\*\*(?:COMPLIANCE )?GAPS[^*]*\*\*[:\s]*(.+?)(?=\*\*RECOMMENDATION|$)',
+        r'GAPS[^:]*:\s*(.+?)(?=RECOMMENDATION|$)'
+    ]
+    
+    recommendation_patterns = [
+        r'RECOMMENDATION[S]?:\s*(.+?)$',
+        r'\*\*RECOMMENDATION[^*]*\*\*[:\s]*(.+?)$'
+    ]
+    
+    def try_patterns(patterns, text):
+        for pattern in patterns:
+            match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
+            if match:
+                return match.group(1).strip()
+        return ''
+    
+    result['policy_requirements'] = try_patterns(policy_patterns, text)
+    result['soc2_evidence'] = try_patterns(soc2_patterns, text)
+    result['logs_evidence'] = try_patterns(logs_patterns, text)
+    result['compliance_assessment'] = try_patterns(assessment_patterns, text)
+    result['gaps_identified'] = try_patterns(gaps_patterns, text)
+    result['recommendation'] = try_patterns(recommendation_patterns, text)
     
     # If parsing failed, put full analysis in policy_requirements
     if not any(result.values()):
