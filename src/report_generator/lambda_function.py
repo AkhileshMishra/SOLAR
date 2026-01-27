@@ -95,16 +95,20 @@ def parse_analysis(analysis_text):
     ]
     
     logs_patterns = [
-        r'LOGS:\s*(.+?)(?=COMPLIANCE|GAPS|RECOMMENDATION|$)',
-        r'\*\*LOG[^*]*\*\*[:\s]*(.+?)(?=\*\*COMPLIANCE|\*\*GAPS|\*\*RECOMMENDATION|$)',
+        r'LOGS:\s*(.+?)(?=COMPLIANCE|GAPS|RECOMMENDATION|\*\*4\.|$)',
+        r'\*\*3\.\s*LOG[^*]*\*\*[:\s]*(.+?)(?=\*\*4\.|\*\*COMPLIANCE|\*\*GAPS|\*\*RECOMMENDATION|$)',
+        r'\*\*LOG[^*]*(?:ANALYSIS|FINDINGS|EVIDENCE)[^*]*\*\*[:\s]*(.+?)(?=\*\*4\.|\*\*COMPLIANCE|\*\*GAPS|\*\*RECOMMENDATION|$)',
+        r'3\.\s*LOG[^:]*:\s*(.+?)(?=4\.|COMPLIANCE|GAPS|RECOMMENDATION|$)',
         r'2\.\s*(?:System\s*)?Logs[^:]*:\s*(.+?)(?=COMPLIANCE|GAPS|RECOMMENDATION|$)',
         r'\*\*NOTE ON LOG[^*]*\*\*[:\s]*(.+?)(?=\*\*COMPLIANCE|\*\*GAPS|\*\*RECOMMENDATION|$)'
     ]
     
     assessment_patterns = [
         r'COMPLIANCE ASSESSMENT:\s*(.+?)(?=GAPS IDENTIFIED|RECOMMENDATION|$)',
+        r'\*\*4\.\s*COMPLIANCE[^*]*\*\*[:\s]*(.+?)(?=\*\*5\.|\*\*GAPS|\*\*RECOMMENDATION|$)',
         r'\*\*COMPLIANCE[^*]*\*\*[:\s]*(.+?)(?=\*\*GAPS|\*\*RECOMMENDATION|\*\*NOTE|$)',
-        r'COMPLIANCE ASSESSMENT[^:]*:\s*(.+?)(?=GAPS|RECOMMENDATION|NOTE|$)'
+        r'COMPLIANCE ASSESSMENT[^:]*:\s*(.+?)(?=GAPS|RECOMMENDATION|NOTE|$)',
+        r'4\.\s*COMPLIANCE[^:]*:\s*(.+?)(?=5\.|GAPS|RECOMMENDATION|$)'
     ]
     
     gaps_patterns = [
@@ -146,13 +150,16 @@ def parse_analysis(analysis_text):
     soc2_text = (result['soc2_evidence'] or '').lower()
     soc2_actually_missing = any(ind in soc2_text for ind in soc2_missing_indicators) or not result['soc2_evidence']
     
-    # Detect if logs are actually missing
+    # Detect if logs are actually missing - but check for positive indicators first
+    logs_present_indicators = ['log entries', 'total log', 'analysis of', 'log analysis', 'authentication activity']
+    logs_text = (result['logs_evidence'] or '').lower()
+    logs_has_data = any(ind in logs_text for ind in logs_present_indicators)
+    
     logs_missing_indicators = [
-        'no log', 'not available', 'no unified', 'empty', 'does not exist',
+        'no log', 'not available', 'no unified', 'does not exist',
         'no operational', 'not found', 'no evidence'
     ]
-    logs_text = (result['logs_evidence'] or '').lower()
-    logs_actually_missing = any(ind in logs_text for ind in logs_missing_indicators) or not result['logs_evidence']
+    logs_actually_missing = (any(ind in logs_text for ind in logs_missing_indicators) or not result['logs_evidence']) and not logs_has_data
     
     # Auto-generate gaps if evidence is missing
     gaps_list = []
