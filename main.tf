@@ -1735,8 +1735,11 @@ def lambda_handler(event, context):
             user_prompt = p.get('prompt', '')
             break
     
+    # Convert system name to table name (lowercase, no spaces)
+    table_name = system_name.lower().replace(' ', '_').replace('-', '_') if system_name else ''
+    
     # Base prompt always used
-    input_text = f"Analyze compliance for Policy Section: {section}. System to validate: {system_name}. 1) Search the Policy Knowledge Base for requirements. 2) Search the SOC2 Knowledge Base for {system_name} vendor controls and evidence. 3) If Logs are available, query the unified_compliance_view. 4) Compare requirements against evidence and cite specific sources."
+    input_text = f"Analyze compliance for Policy Section: {section}. System to validate: {system_name}. 1) Search the Policy Knowledge Base for requirements. 2) Search the SOC2 Knowledge Base for {system_name} vendor controls and evidence. 3) Query logs from table '{table_name}' in database 'compliance_db' using Athena. 4) Compare requirements against evidence and cite specific sources."
     
     # Append user's specific focus if provided
     if user_prompt:
