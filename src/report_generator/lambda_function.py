@@ -80,14 +80,14 @@ def parse_analysis(analysis_text):
     
     text = analysis_text or ''
     
-    # Try to extract sections using common patterns
+    # Extract sections using exact headings from agent instruction
     patterns = {
-        'policy_requirements': r'(?:policy\s*requirements?|requirements?\s*identified)[\s:]*(.+?)(?=evidence|soc2|logs|compliance|gaps|recommendation|$)',
-        'soc2_evidence': r'(?:soc\s*2|soc2)[\s:]*(.+?)(?=logs|compliance|gaps|recommendation|$)',
-        'logs_evidence': r'(?:logs?\s*(?:evidence|findings?)?)[\s:]*(.+?)(?=compliance|gaps|recommendation|$)',
-        'compliance_assessment': r'(?:compliance\s*assessment)[\s:]*(.+?)(?=gaps|recommendation|$)',
-        'gaps_identified': r'(?:gaps?\s*identified)[\s:]*(.+?)(?=recommendation|$)',
-        'recommendation': r'(?:recommendations?)[\s:]*(.+?)$'
+        'policy_requirements': r'POLICY REQUIREMENTS IDENTIFIED:\s*(.+?)(?=SOC2:|LOGS:|COMPLIANCE ASSESSMENT:|GAPS IDENTIFIED:|RECOMMENDATION:|$)',
+        'soc2_evidence': r'SOC2:\s*(.+?)(?=LOGS:|COMPLIANCE ASSESSMENT:|GAPS IDENTIFIED:|RECOMMENDATION:|$)',
+        'logs_evidence': r'LOGS:\s*(.+?)(?=COMPLIANCE ASSESSMENT:|GAPS IDENTIFIED:|RECOMMENDATION:|$)',
+        'compliance_assessment': r'COMPLIANCE ASSESSMENT:\s*(.+?)(?=GAPS IDENTIFIED:|RECOMMENDATION:|$)',
+        'gaps_identified': r'GAPS IDENTIFIED:\s*(.+?)(?=RECOMMENDATION:|$)',
+        'recommendation': r'RECOMMENDATION:\s*(.+?)$'
     }
     
     for key, pattern in patterns.items():
