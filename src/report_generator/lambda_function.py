@@ -82,7 +82,7 @@ def parse_analysis(analysis_text):
     
     # Multiple pattern variations to handle agent response formats
     policy_patterns = [
-        r'POLICY REQUIREMENTS IDENTIFIED:\s*(.+?)(?=SOC2:|LOGS:|COMPLIANCE|GAPS|RECOMMENDATION|$)',
+        r'POLICY REQUIREMENTS IDENTIFIED:\s*(.+?)(?=SOC2:|LOGS:|COMPLIANCE|GAPS|RECOMMENDATION|EVIDENCE|$)',
         r'\*\*POLICY REQUIREMENTS[^*]*\*\*[:\s]*(.+?)(?=\*\*SOC2|\*\*EVIDENCE|\*\*COMPLIANCE|\*\*GAPS|\*\*RECOMMENDATION|\*\*NOTE|$)',
         r'POLICY REQUIREMENTS[^:]*:\s*(.+?)(?=SOC2|EVIDENCE|COMPLIANCE|GAPS|RECOMMENDATION|NOTE|$)'
     ]
@@ -90,17 +90,19 @@ def parse_analysis(analysis_text):
     soc2_patterns = [
         r'SOC2:\s*(.+?)(?=LOGS:|COMPLIANCE|GAPS|RECOMMENDATION|$)',
         r'\*\*[^*]*SOC2[^*]*\*\*[:\s]*(.+?)(?=\*\*LOG|\*\*COMPLIANCE|\*\*GAPS|\*\*RECOMMENDATION|\*\*NOTE|$)',
-        r'SOC2[^:]*(?:EVIDENCE|CONTROLS)[^:]*:\s*(.+?)(?=LOG|COMPLIANCE|GAPS|RECOMMENDATION|NOTE|$)'
+        r'1\.\s*SOC2[^:]*:\s*(.+?)(?=2\.|LOGS|COMPLIANCE|GAPS|RECOMMENDATION|$)',
+        r'SOC2[^:]*(?:EVIDENCE|CONTROLS|Report)[^:]*[:\s]*(.+?)(?=LOG|COMPLIANCE|GAPS|RECOMMENDATION|NOTE|2\.|$)'
     ]
     
     logs_patterns = [
         r'LOGS:\s*(.+?)(?=COMPLIANCE|GAPS|RECOMMENDATION|$)',
         r'\*\*LOG[^*]*\*\*[:\s]*(.+?)(?=\*\*COMPLIANCE|\*\*GAPS|\*\*RECOMMENDATION|$)',
+        r'2\.\s*(?:System\s*)?Logs[^:]*:\s*(.+?)(?=COMPLIANCE|GAPS|RECOMMENDATION|$)',
         r'\*\*NOTE ON LOG[^*]*\*\*[:\s]*(.+?)(?=\*\*COMPLIANCE|\*\*GAPS|\*\*RECOMMENDATION|$)'
     ]
     
     assessment_patterns = [
-        r'COMPLIANCE ASSESSMENT:\s*(.+?)(?=GAPS|RECOMMENDATION|$)',
+        r'COMPLIANCE ASSESSMENT:\s*(.+?)(?=GAPS IDENTIFIED|RECOMMENDATION|$)',
         r'\*\*COMPLIANCE[^*]*\*\*[:\s]*(.+?)(?=\*\*GAPS|\*\*RECOMMENDATION|\*\*NOTE|$)',
         r'COMPLIANCE ASSESSMENT[^:]*:\s*(.+?)(?=GAPS|RECOMMENDATION|NOTE|$)'
     ]
@@ -129,6 +131,25 @@ def parse_analysis(analysis_text):
     result['compliance_assessment'] = try_patterns(assessment_patterns, text)
     result['gaps_identified'] = try_patterns(gaps_patterns, text)
     result['recommendation'] = try_patterns(recommendation_patterns, text)
+    
+    # If gaps section is empty but assessment mentions gaps, extract them
+    if not result['gaps_identified'] or result['gaps_identified'].lower() in ['no gaps identified', 'none']:
+        assessment = result['compliance_assessment'].lower()
+        if 'gap' in assessment or 'missing' in assessment or 'no soc2' in assessment or 'not available' in assessment:
+            # Extract gap-related content from assessment
+            gap_match = re.search(r'((?:critical\s*)?gap[s]?[:\s].+?)(?=recommendation|$)', result['compliance_assessment'], re.IGNORECASE | re.DOTALL)
+            if gap_match:
+                result['gaps_identified'] = gap_match.group(1).strip()
+    
+    # Auto-generate gaps if evidence is missing
+    gaps_list = []
+    if not result['soc2_evidence'] or 'not present' in result['soc2_evidence'].lower() or 'not found' in result['soc2_evidence'].lower():
+        gaps_list.append("No SOC2 report available for this system")
+    if not result['logs_evidence'] or 'no log' in result['logs_evidence'].lower() or 'not available' in result['logs_evidence'].lower():
+        gaps_list.append("No operational logs available for verification")
+    
+    if gaps_list and (not result['gaps_identified'] or result['gaps_identified'].lower() in ['no gaps identified', 'none']):
+        result['gaps_identified'] = '\n'.join(f"{i+1}. {g}" for i, g in enumerate(gaps_list))
     
     # If parsing failed, put full analysis in policy_requirements
     if not any(result.values()):
