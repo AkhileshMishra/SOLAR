@@ -72,6 +72,7 @@ def parse_analysis(analysis_text):
     result = {
         'policy_requirements': '',
         'soc2_evidence': '',
+        'vapt_qualys': '',
         'logs_evidence': '',
         'compliance_assessment': '',
         'gaps_identified': '',
@@ -82,16 +83,23 @@ def parse_analysis(analysis_text):
     
     # Multiple pattern variations to handle agent response formats
     policy_patterns = [
-        r'POLICY REQUIREMENTS IDENTIFIED:\s*(.+?)(?=SOC2:|LOGS:|COMPLIANCE|GAPS|RECOMMENDATION|EVIDENCE|$)',
-        r'\*\*POLICY REQUIREMENTS[^*]*\*\*[:\s]*(.+?)(?=\*\*SOC2|\*\*EVIDENCE|\*\*COMPLIANCE|\*\*GAPS|\*\*RECOMMENDATION|\*\*NOTE|$)',
-        r'POLICY REQUIREMENTS[^:]*:\s*(.+?)(?=SOC2|EVIDENCE|COMPLIANCE|GAPS|RECOMMENDATION|NOTE|$)'
+        r'POLICY REQUIREMENTS IDENTIFIED:\s*(.+?)(?=SOC2:|VAPT|LOGS:|COMPLIANCE|GAPS|RECOMMENDATION|EVIDENCE|$)',
+        r'\*\*POLICY REQUIREMENTS[^*]*\*\*[:\s]*(.+?)(?=\*\*SOC2|\*\*VAPT|\*\*EVIDENCE|\*\*COMPLIANCE|\*\*GAPS|\*\*RECOMMENDATION|\*\*NOTE|$)',
+        r'POLICY REQUIREMENTS[^:]*:\s*(.+?)(?=SOC2|VAPT|EVIDENCE|COMPLIANCE|GAPS|RECOMMENDATION|NOTE|$)'
     ]
     
     soc2_patterns = [
-        r'SOC2:\s*(.+?)(?=LOGS:|COMPLIANCE|GAPS|RECOMMENDATION|$)',
-        r'\*\*[^*]*SOC2[^*]*\*\*[:\s]*(.+?)(?=\*\*LOG|\*\*COMPLIANCE|\*\*GAPS|\*\*RECOMMENDATION|\*\*NOTE|$)',
-        r'1\.\s*SOC2[^:]*:\s*(.+?)(?=2\.|LOGS|COMPLIANCE|GAPS|RECOMMENDATION|$)',
-        r'SOC2[^:]*(?:EVIDENCE|CONTROLS|Report)[^:]*[:\s]*(.+?)(?=LOG|COMPLIANCE|GAPS|RECOMMENDATION|NOTE|2\.|$)'
+        r'SOC2:\s*(.+?)(?=VAPT|LOGS:|COMPLIANCE|GAPS|RECOMMENDATION|$)',
+        r'\*\*[^*]*SOC2[^*]*\*\*[:\s]*(.+?)(?=\*\*VAPT|\*\*LOG|\*\*COMPLIANCE|\*\*GAPS|\*\*RECOMMENDATION|\*\*NOTE|$)',
+        r'1\.\s*SOC2[^:]*:\s*(.+?)(?=2\.|VAPT|LOGS|COMPLIANCE|GAPS|RECOMMENDATION|$)',
+        r'SOC2[^:]*(?:EVIDENCE|CONTROLS|Report)[^:]*[:\s]*(.+?)(?=VAPT|LOG|COMPLIANCE|GAPS|RECOMMENDATION|NOTE|2\.|$)'
+    ]
+    
+    vapt_patterns = [
+        r'VAPT/QUALYS:\s*(.+?)(?=LOGS:|COMPLIANCE|GAPS|RECOMMENDATION|$)',
+        r'VAPT[^:]*:\s*(.+?)(?=LOGS:|COMPLIANCE|GAPS|RECOMMENDATION|$)',
+        r'\*\*VAPT[^*]*\*\*[:\s]*(.+?)(?=\*\*LOG|\*\*COMPLIANCE|\*\*GAPS|\*\*RECOMMENDATION|$)',
+        r'QUALYS[^:]*:\s*(.+?)(?=LOGS:|COMPLIANCE|GAPS|RECOMMENDATION|$)'
     ]
     
     logs_patterns = [
@@ -131,6 +139,7 @@ def parse_analysis(analysis_text):
     
     result['policy_requirements'] = try_patterns(policy_patterns, text)
     result['soc2_evidence'] = try_patterns(soc2_patterns, text)
+    result['vapt_qualys'] = try_patterns(vapt_patterns, text)
     result['logs_evidence'] = try_patterns(logs_patterns, text)
     result['compliance_assessment'] = try_patterns(assessment_patterns, text)
     result['gaps_identified'] = try_patterns(gaps_patterns, text)
@@ -279,7 +288,11 @@ def create_html_report(policy_file, system_name, findings):
                 <div class="content">{parsed['soc2_evidence'] or '<span class="na">No SOC2 evidence found</span>'}</div>
             </div>
             <div class="section-box evidence">
-                <div class="evidence-label">2. System Logs (if available)</div>
+                <div class="evidence-label">2. VAPT/Qualys Reports (if available)</div>
+                <div class="content">{parsed['vapt_qualys'] or '<span class="na">No VAPT/Qualys data found</span>'}</div>
+            </div>
+            <div class="section-box evidence">
+                <div class="evidence-label">3. System Logs (if available)</div>
                 <div class="content">{parsed['logs_evidence'] or '<span class="na">No log evidence found</span>'}</div>
             </div>
             
@@ -380,8 +393,12 @@ def add_detailed_findings(doc, findings, system_name=''):
             p1.add_run(parsed['soc2_evidence'] or 'No SOC2 evidence found')
             
             p2 = doc.add_paragraph()
-            p2.add_run('2. System Logs (if available): ').bold = True
-            p2.add_run(parsed['logs_evidence'] or 'No log evidence found')
+            p2.add_run('2. VAPT/Qualys Reports (if available): ').bold = True
+            p2.add_run(parsed['vapt_qualys'] or 'No VAPT/Qualys data found')
+            
+            p3 = doc.add_paragraph()
+            p3.add_run('3. System Logs (if available): ').bold = True
+            p3.add_run(parsed['logs_evidence'] or 'No log evidence found')
             
             # Compliance Assessment
             doc.add_heading('COMPLIANCE ASSESSMENT', 3)

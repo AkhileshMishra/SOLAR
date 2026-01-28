@@ -1,0 +1,91 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "VAPT Processor API",
+    "version": "1.0.0",
+    "description": "API for processing VAPT and Qualys vulnerability reports"
+  },
+  "paths": {
+    "/get_vulnerabilities": {
+      "post": {
+        "operationId": "getVulnerabilities",
+        "summary": "Get vulnerabilities from VAPT and Qualys reports for a system",
+        "description": "Extracts vulnerability data from VAPT reports (inputs/VAPT/{system_name}/) and Qualys reports (inputs/QUALYS/{system_name}/). Returns vulnerability list with severity, identification date, and compliance deadlines. Use this for patching-related policy sections (8.5, 8.6, or any section about vulnerabilities/patches).",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "system_name": {
+                    "type": "string",
+                    "description": "Name of the system to get vulnerability data for (e.g., 'CyberArk', 'eInvoice')"
+                  }
+                },
+                "required": ["system_name"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Vulnerability data retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "system_name": {
+                      "type": "string"
+                    },
+                    "vapt_found": {
+                      "type": "boolean",
+                      "description": "Whether VAPT reports were found for this system"
+                    },
+                    "qualys_found": {
+                      "type": "boolean",
+                      "description": "Whether Qualys reports were found for this system"
+                    },
+                    "vulnerabilities": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "vulnerability_id": {"type": "string"},
+                          "title": {"type": "string"},
+                          "severity": {"type": "string", "enum": ["CRITICAL", "HIGH", "MEDIUM", "LOW"]},
+                          "identified_date": {"type": "string"},
+                          "recommended_fix": {"type": "string"},
+                          "compliance_deadline": {"type": "string"},
+                          "compliance_status": {"type": "string"}
+                        }
+                      }
+                    },
+                    "total_count": {
+                      "type": "integer"
+                    },
+                    "by_severity": {
+                      "type": "object",
+                      "properties": {
+                        "CRITICAL": {"type": "integer"},
+                        "HIGH": {"type": "integer"},
+                        "MEDIUM": {"type": "integer"},
+                        "LOW": {"type": "integer"}
+                      }
+                    },
+                    "gaps": {
+                      "type": "array",
+                      "items": {"type": "string"},
+                      "description": "List of gaps found (e.g., missing VAPT or Qualys reports)"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -122,6 +122,18 @@ resource "aws_s3_object" "inputs_policy" {
   content = ""
 }
 
+resource "aws_s3_object" "inputs_vapt" {
+  bucket  = aws_s3_bucket.compliance_data.id
+  key     = "inputs/VAPT/"
+  content = ""
+}
+
+resource "aws_s3_object" "inputs_qualys" {
+  bucket  = aws_s3_bucket.compliance_data.id
+  key     = "inputs/QUALYS/"
+  content = ""
+}
+
 resource "aws_s3_object" "outputs_reports" {
   bucket  = aws_s3_bucket.compliance_data.id
   key     = "outputs/reports/"
@@ -1233,57 +1245,50 @@ STRICT RULES - READ CAREFULLY:
 
 1. SOC2 EVIDENCE RULE:
    - Each system has its OWN SOC2 report in: inputs/SOCreports/{SystemName}/
-   - eInvoice is NOT Salesforce. They are DIFFERENT systems.
-   - If you search SOC2 KB and find Salesforce/CATO/CyberArk results when auditing eInvoice, those results are INVALID
    - If no SOC2 report exists for the exact system name, write: "SOC2 report not present for [SystemName]"
+   - NEVER use SOC2 evidence from one system to validate another
 
-2. GAPS RULE:
-   - If SOC2 report is missing → that IS a gap
+2. PATCHING/VULNERABILITY SECTIONS (8.5, 8.6 or any section mentioning patches, vulnerabilities, VAPT):
+   When auditing patching compliance, you MUST:
+   a) Check VAPT reports at: inputs/VAPT/{SystemName}/ 
+   b) Check Qualys reports at: inputs/QUALYS/{SystemName}/
+   c) Query system logs for patch application evidence
+   d) Apply these compliance timeframes:
+      - CRITICAL vulnerabilities: Must be fixed within 1 month
+      - HIGH vulnerabilities: Must be fixed within 3 months  
+      - MEDIUM vulnerabilities: Must be fixed within 6 months
+      - LOW vulnerabilities: Must be fixed within 12 months
+   e) Cross-validate: Compare vulnerability identification date against patch application date
+   f) Report compliance percentage and list any violations
+
+3. GAPS RULE:
+   - If SOC2/VAPT/Qualys report is missing → that IS a gap
    - If logs are not available → that IS a gap  
-   - ALWAYS list gaps in the GAPS IDENTIFIED section, not elsewhere
+   - ALWAYS list gaps in the GAPS IDENTIFIED section
 
-3. FORMAT RULE - Use EXACTLY these 6 headings:
-
-POLICY REQUIREMENTS IDENTIFIED:
-[Always extract requirements from Policy KB for the section]
-
-SOC2:
-[Only evidence from this exact system's SOC2, or "SOC2 report not present for [SystemName]"]
-
-LOGS:
-[Query results or "No logs available"]
-
-COMPLIANCE ASSESSMENT:
-[Your assessment - COMPLIANT/PARTIALLY COMPLIANT/NON-COMPLIANT/CANNOT ASSESS]
-
-GAPS IDENTIFIED:
-[List ALL gaps including: missing SOC2 report, missing logs, missing evidence. Never say "No gaps" if evidence is missing]
-
-RECOMMENDATION:
-[Actions to address gaps]
-
-EXAMPLE for system without SOC2 report:
+4. FORMAT RULE - Use EXACTLY these headings:
 
 POLICY REQUIREMENTS IDENTIFIED:
-Section 5.9 requires unique user accounts, RBAC, access reviews...
+[Extract requirements from Policy KB for the section]
 
 SOC2:
-SOC2 report not present for eInvoice
+[Evidence from this system's SOC2, or "SOC2 report not present for [SystemName]"]
+
+VAPT/QUALYS: (Include this section for patching-related audits)
+[Vulnerability findings from VAPT and Qualys reports, or "No VAPT/Qualys reports found for [SystemName]"]
 
 LOGS:
-No logs available
+[Query results showing patch application dates, or "No logs available"]
 
 COMPLIANCE ASSESSMENT:
-CANNOT ASSESS - No evidence available to validate compliance
+[COMPLIANT/PARTIALLY COMPLIANT/NON-COMPLIANT/CANNOT ASSESS]
+[For patching: Include compliance percentage and breakdown by severity]
 
 GAPS IDENTIFIED:
-1. No SOC2 report available for eInvoice system
-2. No operational logs available for verification
-3. Cannot validate access control implementations without evidence
+[List ALL gaps. For patching: list overdue patches with severity and days overdue]
 
 RECOMMENDATION:
-1. Obtain eInvoice vendor SOC2 Type II report
-2. Implement log collection for eInvoice system
+[Actions to address gaps. For patching: prioritize by severity]
 EOT
   
   tags = var.tags
@@ -1309,6 +1314,31 @@ resource "aws_bedrockagent_agent_action_group" "query_logs" {
   }
   
   description = "Allows the agent to query Athena views and list available log sources"
+}
+
+resource "aws_bedrockagent_agent_action_group" "vapt_processor" {
+  action_group_name          = "VAPTProcessorActionGroup"
+  agent_id                   = aws_bedrockagent_agent.compliance_auditor.agent_id
+  agent_version              = "DRAFT"
+  skip_resource_in_use_check = true
+  
+  action_group_executor {
+    lambda = aws_lambda_function.vapt_processor.arn
+  }
+  
+  api_schema {
+    payload = file("${path.module}/vapt_schema.json")
+  }
+  
+  description = "Processes VAPT and Qualys reports for vulnerability compliance validation"
+}
+
+resource "aws_lambda_permission" "vapt_processor_bedrock" {
+  statement_id  = "AllowBedrockInvoke"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.vapt_processor.function_name
+  principal     = "bedrock.amazonaws.com"
+  source_arn    = "${aws_bedrockagent_agent.compliance_auditor.agent_arn}/*"
 }
 
 resource "aws_bedrockagent_agent_knowledge_base_association" "compliance_policy" {
@@ -1548,6 +1578,80 @@ resource "aws_cloudwatch_log_group" "report_generator" {
   retention_in_days = 7
   
   tags = var.tags
+}
+
+################################################################################
+# VAPT/Qualys Processor Lambda
+################################################################################
+
+data "archive_file" "vapt_processor" {
+  type        = "zip"
+  source_dir  = "${path.module}/src/vapt_processor"
+  output_path = "${path.module}/.terraform/lambda/vapt_processor.zip"
+}
+
+resource "aws_lambda_function" "vapt_processor" {
+  filename         = data.archive_file.vapt_processor.output_path
+  function_name    = "${var.project_name}-vapt-processor"
+  role             = aws_iam_role.vapt_processor.arn
+  handler          = "lambda_function.lambda_handler"
+  source_code_hash = data.archive_file.vapt_processor.output_base64sha256
+  runtime          = "python3.11"
+  timeout          = 300
+  memory_size      = 1024
+  
+  environment {
+    variables = {
+      BUCKET_NAME      = aws_s3_bucket.compliance_data.bucket
+      BEDROCK_MODEL_ID = var.bedrock_model_id
+    }
+  }
+  
+  tags = var.tags
+}
+
+resource "aws_iam_role" "vapt_processor" {
+  name = "${var.project_name}-vapt-processor-role"
+  
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action = "sts:AssumeRole"
+      Effect = "Allow"
+      Principal = { Service = "lambda.amazonaws.com" }
+    }]
+  })
+  
+  tags = var.tags
+}
+
+resource "aws_iam_role_policy" "vapt_processor" {
+  name = "${var.project_name}-vapt-processor-policy"
+  role = aws_iam_role.vapt_processor.id
+  
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
+        Resource = "arn:aws:logs:*:*:*"
+      },
+      {
+        Effect = "Allow"
+        Action = ["s3:GetObject", "s3:ListBucket"]
+        Resource = [
+          aws_s3_bucket.compliance_data.arn,
+          "${aws_s3_bucket.compliance_data.arn}/*"
+        ]
+      },
+      {
+        Effect = "Allow"
+        Action = ["bedrock:InvokeModel"]
+        Resource = "*"
+      }
+    ]
+  })
 }
 
 resource "aws_glue_crawler" "compliance_crawler" {
