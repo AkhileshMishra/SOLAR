@@ -952,33 +952,35 @@ resource "null_resource" "create_vapt_opensearch_index" {
   
   provisioner "local-exec" {
     command = <<-EOT
-      python3 -c "
-import boto3, requests, time
-from requests_aws4auth import AWS4Auth
-
-session = boto3.Session()
-creds = session.get_credentials().get_frozen_credentials()
-awsauth = AWS4Auth(creds.access_key, creds.secret_key, 'ap-southeast-1', 'aoss', session_token=creds.token)
-
-host = '${aws_opensearchserverless_collection.vapt_collection.collection_endpoint}'.replace('https://', '')
-url = f'https://{host}/bedrock-vapt-index'
-mapping = {
-    'settings': {'index': {'knn': True}},
-    'mappings': {'properties': {
-        'bedrock-knowledge-base-default-vector': {'type': 'knn_vector', 'dimension': 1024, 'method': {'engine': 'faiss', 'name': 'hnsw', 'space_type': 'l2'}},
-        'AMAZON_BEDROCK_TEXT_CHUNK': {'type': 'text'},
-        'AMAZON_BEDROCK_METADATA': {'type': 'text', 'index': False}
-    }}
-}
-
-for attempt in range(5):
-    if requests.head(url, auth=awsauth).status_code == 200:
-        print('Index exists'); exit(0)
-    response = requests.put(url, auth=awsauth, json=mapping, headers={'Content-Type': 'application/json'})
-    if response.status_code in [200, 201]:
-        print('Index created'); exit(0)
-    time.sleep(30)
-"
+      HOST=$(echo "${aws_opensearchserverless_collection.vapt_collection.collection_endpoint}" | sed 's|https://||')
+      
+      for i in 1 2 3 4 5; do
+        STATUS=$(aws opensearchserverless batch-get-collection --names vapt-reports-vectors --query 'collectionDetails[0].status' --output text --region ap-southeast-1 2>/dev/null || echo "CREATING")
+        if [ "$STATUS" = "ACTIVE" ]; then
+          echo "Collection is active, creating index..."
+          break
+        fi
+        echo "Waiting for collection... (attempt $i)"
+        sleep 30
+      done
+      
+      RESPONSE=$(curl -s -o /dev/null -w "%%{http_code}" -X HEAD "https://$HOST/bedrock-vapt-index" --aws-sigv4 "aws:amz:ap-southeast-1:aoss" --user "" 2>/dev/null || echo "000")
+      if [ "$RESPONSE" = "200" ]; then
+        echo "Index already exists"
+        exit 0
+      fi
+      
+      curl -X PUT "https://$HOST/bedrock-vapt-index" \
+        --aws-sigv4 "aws:amz:ap-southeast-1:aoss" --user "" \
+        -H "Content-Type: application/json" \
+        -d '{
+          "settings": {"index": {"knn": true}},
+          "mappings": {"properties": {
+            "bedrock-knowledge-base-default-vector": {"type": "knn_vector", "dimension": 1024, "method": {"engine": "faiss", "name": "hnsw", "space_type": "l2"}},
+            "AMAZON_BEDROCK_TEXT_CHUNK": {"type": "text"},
+            "AMAZON_BEDROCK_METADATA": {"type": "text", "index": false}
+          }}
+        }' || echo "Index creation attempted"
     EOT
   }
   depends_on = [aws_opensearchserverless_collection.vapt_collection, aws_opensearchserverless_access_policy.vapt_data]
