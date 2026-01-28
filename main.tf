@@ -1015,13 +1015,27 @@ resource "aws_bedrockagent_knowledge_base" "vapt_kb" {
 resource "aws_bedrockagent_data_source" "vapt_documents" {
   name              = "${var.project_name}-vapt-docs"
   knowledge_base_id = aws_bedrockagent_knowledge_base.vapt_kb.id
-  description       = "VAPT and Qualys reports from S3"
+  description       = "VAPT reports from S3"
 
   data_source_configuration {
     type = "S3"
     s3_configuration {
       bucket_arn         = aws_s3_bucket.compliance_data.arn
-      inclusion_prefixes = ["inputs/VAPT/", "inputs/QUALYS/"]
+      inclusion_prefixes = ["inputs/VAPT/"]
+    }
+  }
+}
+
+resource "aws_bedrockagent_data_source" "qualys_documents" {
+  name              = "${var.project_name}-qualys-docs"
+  knowledge_base_id = aws_bedrockagent_knowledge_base.vapt_kb.id
+  description       = "Qualys reports from S3"
+
+  data_source_configuration {
+    type = "S3"
+    s3_configuration {
+      bucket_arn         = aws_s3_bucket.compliance_data.arn
+      inclusion_prefixes = ["inputs/QUALYS/"]
     }
   }
 }
