@@ -391,30 +391,21 @@ resource "aws_opensearchserverless_collection" "kb_collection" {
 }
 
 # Create the vector index for Bedrock Knowledge Base using null_resource
-# This avoids the circular dependency issue with the opensearch provider
+# Wait for collection to be fully ready before creating index
+resource "time_sleep" "wait_for_policy_collection" {
+  depends_on      = [aws_opensearchserverless_collection.kb_collection]
+  create_duration = "120s"
+}
+
 resource "null_resource" "create_opensearch_index" {
   triggers = {
     collection_endpoint = aws_opensearchserverless_collection.kb_collection.collection_endpoint
-    always_run = timestamp()
   }
 
   provisioner "local-exec" {
     command = <<-EOT
       set -ex
       pip3 install awscurl --quiet
-      
-      echo "Waiting for Policy KB collection to be active..."
-      for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
-        STATUS=$(aws opensearchserverless batch-get-collection --names compliance-kb-vectors --query 'collectionDetails[0].status' --output text --region ${var.aws_region} 2>/dev/null || echo "CREATING")
-        echo "Attempt $i: Collection status = $STATUS"
-        if [ "$STATUS" = "ACTIVE" ]; then break; fi
-        sleep 30
-      done
-      
-      [ "$STATUS" != "ACTIVE" ] && echo "ERROR: Collection not active" && exit 1
-      
-      echo "Waiting 60s for access policies to propagate..."
-      sleep 60
       
       ENDPOINT="${aws_opensearchserverless_collection.kb_collection.collection_endpoint}"
       INDEX_NAME="bedrock-knowledge-base-default-index-v2"
@@ -452,7 +443,7 @@ resource "null_resource" "create_opensearch_index" {
   }
 
   depends_on = [
-    aws_opensearchserverless_collection.kb_collection,
+    time_sleep.wait_for_policy_collection,
     aws_opensearchserverless_access_policy.data
   ]
 }
@@ -673,30 +664,22 @@ resource "aws_opensearchserverless_collection" "soc2_collection" {
   tags = var.tags
 }
 
+# Wait for SOC2 collection to be fully ready
+resource "time_sleep" "wait_for_soc2_collection" {
+  depends_on      = [aws_opensearchserverless_collection.soc2_collection]
+  create_duration = "120s"
+}
+
 # Create vector index for SOC2 KB
 resource "null_resource" "create_soc2_opensearch_index" {
   triggers = {
     collection_endpoint = aws_opensearchserverless_collection.soc2_collection.collection_endpoint
-    always_run = timestamp()
   }
 
   provisioner "local-exec" {
     command = <<-EOT
       set -ex
       pip3 install awscurl --quiet
-      
-      echo "Waiting for SOC2 collection to be active..."
-      for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
-        STATUS=$(aws opensearchserverless batch-get-collection --names soc2-reports-vectors --query 'collectionDetails[0].status' --output text --region ${var.aws_region} 2>/dev/null || echo "CREATING")
-        echo "Attempt $i: Collection status = $STATUS"
-        if [ "$STATUS" = "ACTIVE" ]; then break; fi
-        sleep 30
-      done
-      
-      [ "$STATUS" != "ACTIVE" ] && echo "ERROR: Collection not active" && exit 1
-      
-      echo "Waiting 60s for access policies to propagate..."
-      sleep 60
       
       ENDPOINT="${aws_opensearchserverless_collection.soc2_collection.collection_endpoint}"
       INDEX_NAME="bedrock-soc2-index"
@@ -734,7 +717,7 @@ resource "null_resource" "create_soc2_opensearch_index" {
   }
 
   depends_on = [
-    aws_opensearchserverless_collection.soc2_collection,
+    time_sleep.wait_for_soc2_collection,
     aws_opensearchserverless_access_policy.soc2_data
   ]
 }
