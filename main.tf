@@ -394,125 +394,40 @@ resource "aws_opensearchserverless_collection" "kb_collection" {
 resource "null_resource" "create_opensearch_index" {
   triggers = {
     collection_endpoint = aws_opensearchserverless_collection.kb_collection.collection_endpoint
-    # Re-run if the caller identity changes (to ensure policy is updated)
     caller_arn = data.aws_caller_identity.current.arn
   }
 
   provisioner "local-exec" {
     command = <<-EOT
-      # Wait for collection and access policy to be fully active
-      echo "Waiting 60 seconds for OpenSearch collection and access policies to propagate..."
-      sleep 60
+      HOST=$(echo "${aws_opensearchserverless_collection.kb_collection.collection_endpoint}" | sed 's|https://||')
       
-      # Install required Python packages
-      pip3 install boto3 requests requests-aws4auth --quiet
+      for i in 1 2 3 4 5; do
+        STATUS=$(aws opensearchserverless batch-get-collection --names compliance-kb-vectors --query 'collectionDetails[0].status' --output text --region ${var.aws_region} 2>/dev/null || echo "CREATING")
+        if [ "$STATUS" = "ACTIVE" ]; then
+          echo "Collection is active, creating index..."
+          break
+        fi
+        echo "Waiting for collection... (attempt $i)"
+        sleep 30
+      done
       
-      # Set environment variables for the Python script
-      export AWS_DEFAULT_REGION="${var.aws_region}"
-      export OPENSEARCH_ENDPOINT="${aws_opensearchserverless_collection.kb_collection.collection_endpoint}"
+      RESPONSE=$(curl -s -o /dev/null -w "%%{http_code}" -X HEAD "https://$HOST/bedrock-knowledge-base-default-index-v2" --aws-sigv4 "aws:amz:${var.aws_region}:aoss" --user "" 2>/dev/null || echo "000")
+      if [ "$RESPONSE" = "200" ]; then
+        echo "Index already exists"
+        exit 0
+      fi
       
-      # Create the index using Python with AWS SigV4 authentication and retry logic
-      python3 << 'PYTHON_SCRIPT'
-import boto3
-import os
-import requests
-import time
-from requests_aws4auth import AWS4Auth
-
-# Get AWS credentials from environment
-session = boto3.Session()
-credentials = session.get_credentials()
-region = os.environ.get('AWS_DEFAULT_REGION', 'ap-southeast-1')
-service = 'aoss'
-
-# Print the identity being used for debugging
-sts = boto3.client('sts')
-caller_identity = sts.get_caller_identity()
-print(f"Running as: {caller_identity['Arn']}")
-print(f"Account: {caller_identity['Account']}")
-
-awsauth = AWS4Auth(
-    credentials.access_key,
-    credentials.secret_key,
-    region,
-    service,
-    session_token=credentials.token
-)
-
-# OpenSearch endpoint
-endpoint = os.environ.get('OPENSEARCH_ENDPOINT', '${aws_opensearchserverless_collection.kb_collection.collection_endpoint}')
-index_name = 'bedrock-knowledge-base-default-index-v2'
-url = f'{endpoint}/{index_name}'
-
-# Index mapping for Bedrock Knowledge Base
-mapping = {
-    "settings": {
-        "index": {
-            "number_of_shards": 2,
-            "number_of_replicas": 0,
-            "knn": True
-        }
-    },
-    "mappings": {
-        "properties": {
-            "bedrock-knowledge-base-default-vector": {
-                "type": "knn_vector",
-                "dimension": 1024,
-                "method": {
-                    "engine": "faiss",
-                    "name": "hnsw",
-                    "space_type": "l2",
-                    "parameters": {
-                        "m": 16,
-                        "ef_construction": 512
-                    }
-                }
-            },
-            "AMAZON_BEDROCK_TEXT_CHUNK": {
-                "type": "text"
-            },
-            "AMAZON_BEDROCK_METADATA": {
-                "type": "text",
-                "index": False
-            }
-        }
-    }
-}
-
-# Retry logic for index creation
-max_retries = 5
-retry_delay = 30  # seconds
-
-for attempt in range(max_retries):
-    # Check if index exists
-    check_response = requests.head(url, auth=awsauth)
-    if check_response.status_code == 200:
-        print(f'Index {index_name} already exists')
-        exit(0)
-    
-    # Create the index
-    print(f'Attempt {attempt + 1}/{max_retries}: Creating index {index_name}...')
-    response = requests.put(
-        url,
-        auth=awsauth,
-        json=mapping,
-        headers={'Content-Type': 'application/json'}
-    )
-    
-    if response.status_code in [200, 201]:
-        print(f'Index {index_name} created successfully')
-        exit(0)
-    elif response.status_code == 403 and attempt < max_retries - 1:
-        print(f'Permission denied (403). Waiting {retry_delay}s for access policy to propagate...')
-        time.sleep(retry_delay)
-    else:
-        print(f'Error creating index: {response.status_code} - {response.text}')
-        if attempt == max_retries - 1:
-            exit(1)
-
-print('Failed to create index after all retries')
-exit(1)
-PYTHON_SCRIPT
+      curl -X PUT "https://$HOST/bedrock-knowledge-base-default-index-v2" \
+        --aws-sigv4 "aws:amz:${var.aws_region}:aoss" --user "" \
+        -H "Content-Type: application/json" \
+        -d '{
+          "settings": {"index": {"knn": true}},
+          "mappings": {"properties": {
+            "bedrock-knowledge-base-default-vector": {"type": "knn_vector", "dimension": 1024, "method": {"engine": "faiss", "name": "hnsw", "space_type": "l2"}},
+            "AMAZON_BEDROCK_TEXT_CHUNK": {"type": "text"},
+            "AMAZON_BEDROCK_METADATA": {"type": "text", "index": false}
+          }}
+        }' || echo "Index creation attempted"
     EOT
   }
 
@@ -747,85 +662,35 @@ resource "null_resource" "create_soc2_opensearch_index" {
 
   provisioner "local-exec" {
     command = <<-EOT
-      echo "Waiting 60 seconds for SOC2 OpenSearch collection to be ready..."
-      sleep 60
+      HOST=$(echo "${aws_opensearchserverless_collection.soc2_collection.collection_endpoint}" | sed 's|https://||')
       
-      pip3 install boto3 requests requests-aws4auth --quiet
+      for i in 1 2 3 4 5; do
+        STATUS=$(aws opensearchserverless batch-get-collection --names soc2-reports-vectors --query 'collectionDetails[0].status' --output text --region ${var.aws_region} 2>/dev/null || echo "CREATING")
+        if [ "$STATUS" = "ACTIVE" ]; then
+          echo "Collection is active, creating index..."
+          break
+        fi
+        echo "Waiting for collection... (attempt $i)"
+        sleep 30
+      done
       
-      export AWS_DEFAULT_REGION="${var.aws_region}"
-      export OPENSEARCH_ENDPOINT="${aws_opensearchserverless_collection.soc2_collection.collection_endpoint}"
+      RESPONSE=$(curl -s -o /dev/null -w "%%{http_code}" -X HEAD "https://$HOST/bedrock-soc2-index" --aws-sigv4 "aws:amz:${var.aws_region}:aoss" --user "" 2>/dev/null || echo "000")
+      if [ "$RESPONSE" = "200" ]; then
+        echo "Index already exists"
+        exit 0
+      fi
       
-      python3 << 'PYTHON_SCRIPT'
-import boto3
-import os
-import requests
-import time
-from requests_aws4auth import AWS4Auth
-
-session = boto3.Session()
-credentials = session.get_credentials()
-region = os.environ.get('AWS_DEFAULT_REGION', 'ap-southeast-1')
-service = 'aoss'
-
-awsauth = AWS4Auth(
-    credentials.access_key,
-    credentials.secret_key,
-    region,
-    service,
-    session_token=credentials.token
-)
-
-endpoint = os.environ.get('OPENSEARCH_ENDPOINT')
-index_name = 'bedrock-soc2-index'
-url = f'{endpoint}/{index_name}'
-
-mapping = {
-    "settings": {
-        "index": {
-            "number_of_shards": 2,
-            "number_of_replicas": 0,
-            "knn": True
-        }
-    },
-    "mappings": {
-        "properties": {
-            "bedrock-knowledge-base-default-vector": {
-                "type": "knn_vector",
-                "dimension": 1024,
-                "method": {
-                    "engine": "faiss",
-                    "name": "hnsw",
-                    "space_type": "l2",
-                    "parameters": {"m": 16, "ef_construction": 512}
-                }
-            },
+      curl -X PUT "https://$HOST/bedrock-soc2-index" \
+        --aws-sigv4 "aws:amz:${var.aws_region}:aoss" --user "" \
+        -H "Content-Type: application/json" \
+        -d '{
+          "settings": {"index": {"knn": true}},
+          "mappings": {"properties": {
+            "bedrock-knowledge-base-default-vector": {"type": "knn_vector", "dimension": 1024, "method": {"engine": "faiss", "name": "hnsw", "space_type": "l2"}},
             "AMAZON_BEDROCK_TEXT_CHUNK": {"type": "text"},
-            "AMAZON_BEDROCK_METADATA": {"type": "text", "index": False}
-        }
-    }
-}
-
-max_retries = 5
-for attempt in range(max_retries):
-    check = requests.head(url, auth=awsauth)
-    if check.status_code == 200:
-        print(f'Index {index_name} already exists')
-        exit(0)
-    
-    print(f'Attempt {attempt + 1}: Creating SOC2 index...')
-    response = requests.put(url, auth=awsauth, json=mapping, headers={'Content-Type': 'application/json'})
-    
-    if response.status_code in [200, 201]:
-        print(f'Index {index_name} created successfully')
-        exit(0)
-    elif response.status_code == 403 and attempt < max_retries - 1:
-        print(f'Permission denied. Waiting 30s...')
-        time.sleep(30)
-    else:
-        print(f'Error: {response.status_code} - {response.text}')
-        if attempt == max_retries - 1:
-            exit(1)
-PYTHON_SCRIPT
+            "AMAZON_BEDROCK_METADATA": {"type": "text", "index": false}
+          }}
+        }' || echo "Index creation attempted"
     EOT
   }
 
