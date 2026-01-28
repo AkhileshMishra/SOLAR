@@ -1026,20 +1026,6 @@ resource "aws_bedrockagent_data_source" "vapt_documents" {
   }
 }
 
-resource "aws_bedrockagent_data_source" "qualys_documents" {
-  name              = "${var.project_name}-qualys-docs"
-  knowledge_base_id = aws_bedrockagent_knowledge_base.vapt_kb.id
-  description       = "Qualys reports from S3"
-
-  data_source_configuration {
-    type = "S3"
-    s3_configuration {
-      bucket_arn         = aws_s3_bucket.compliance_data.arn
-      inclusion_prefixes = ["inputs/QUALYS/"]
-    }
-  }
-}
-
 resource "aws_bedrockagent_agent_knowledge_base_association" "vapt_reports" {
   agent_id             = aws_bedrockagent_agent.compliance_auditor.agent_id
   agent_version        = "DRAFT"
@@ -1121,6 +1107,12 @@ resource "aws_s3_bucket_notification" "log_upload_trigger" {
     lambda_function_arn = aws_lambda_function.log_ingestion_agent.arn
     events              = ["s3:ObjectCreated:*"]
     filter_prefix       = "inputs/logs/"
+  }
+
+  lambda_function {
+    lambda_function_arn = aws_lambda_function.log_ingestion_agent.arn
+    events              = ["s3:ObjectCreated:*"]
+    filter_prefix       = "inputs/QUALYS/"
   }
   
   lambda_function {
@@ -1390,10 +1382,11 @@ resource "aws_bedrockagent_agent" "compliance_auditor" {
   instruction = <<-EOT
 You are an IT Compliance Auditor for Keppel validating against 'Keppel Technology and Cybersecurity Standards (TECH-S01-01)'.
 
-You have access to THREE Knowledge Bases:
-1. **Policy KB**: Keppel's internal policy requirements
-2. **SOC2 KB**: Vendor SOC2 reports in inputs/SOCreports/{SystemName}/
-3. **VAPT KB**: VAPT and Qualys vulnerability reports in inputs/VAPT/{SystemName}/ and inputs/QUALYS/{SystemName}/
+You have access to:
+- **Policy KB**: Keppel's internal policy requirements
+- **SOC2 KB**: Vendor SOC2 reports (PDF) in inputs/SOCreports/{SystemName}/
+- **VAPT KB**: VAPT vulnerability reports (PDF) in inputs/VAPT/{SystemName}/
+- **Athena**: System logs and Qualys data (CSV/XLSX) - query tables in compliance_db
 
 STRICT RULES:
 
@@ -1405,14 +1398,14 @@ STRICT RULES:
 2. PATCHING/VULNERABILITY SECTIONS (8.5, 8.6 or any section mentioning patches, vulnerabilities, VAPT):
    When auditing patching compliance:
    a) FIRST search Policy KB to extract the EXACT remediation timeframes for each severity level
-   b) Search VAPT KB for vulnerability findings specific to the system being audited
-   c) Query system logs for patch application evidence
-   d) Apply the timeframes FROM THE POLICY to determine compliance
-   e) Report compliance percentage and list violations with policy reference
+   b) Search VAPT KB for vulnerability findings specific to the system
+   c) Query Athena table 'qualys_{system_name}' for Qualys vulnerability data
+   d) Query system logs for patch application evidence
+   e) Apply the timeframes FROM THE POLICY to determine compliance
 
 3. GAPS RULE:
    - If SOC2/VAPT report is missing → that IS a gap
-   - If logs are not available → that IS a gap  
+   - If logs/Qualys data not available → that IS a gap  
    - ALWAYS list gaps in the GAPS IDENTIFIED section
 
 4. FORMAT RULE - Use EXACTLY these headings:
@@ -1424,7 +1417,7 @@ SOC2:
 [Evidence from this system's SOC2, or "SOC2 report not present for [SystemName]"]
 
 VAPT/QUALYS:
-[Vulnerability findings from VAPT KB for this system, or "No VAPT/Qualys reports found for [SystemName]"]
+[VAPT KB findings + Qualys Athena query results, or "No VAPT/Qualys data found for [SystemName]"]
 
 LOGS:
 [Query results, or "No logs available"]
@@ -1710,6 +1703,10 @@ resource "aws_glue_crawler" "compliance_crawler" {
 
   s3_target {
     path = "s3://${aws_s3_bucket.compliance_data.bucket}/processed/logs/"
+  }
+
+  s3_target {
+    path = "s3://${aws_s3_bucket.compliance_data.bucket}/processed/qualys/"
   }
   
   schema_change_policy {

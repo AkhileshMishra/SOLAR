@@ -21,13 +21,10 @@ def lambda_handler(event, context):
         
         logger.info(f"Processing file: s3://{bucket}/{key}")
         
-        # 2. Identify System Name (Folder Structure)
-        # Example key: inputs/logs/CyberArk/report.xlsx -> system_name = "CyberArk"
+        # 2. Identify source type and system name
         path_parts = key.split('/')
-        if len(path_parts) > 3:
-            system_name = path_parts[2]  # Subfolder name
-        else:
-            system_name = "generic_logs"
+        source_type = path_parts[1] if len(path_parts) > 1 else 'logs'  # logs or QUALYS
+        system_name = path_parts[2] if len(path_parts) > 2 else 'generic'
 
         # 3. Read File (Excel or CSV)
         df = read_file_to_dataframe(bucket, key)
@@ -37,10 +34,12 @@ def lambda_handler(event, context):
             return {"status": "Failed"}
 
         # 4. Save as CSV to 'processed/' folder
-        # This merges all files into one folder per system
-        # e.g. processed/logs/CyberArk/report_march.csv
         file_name = path_parts[-1].replace('.xlsx', '.csv').replace('.xls', '.csv')
-        output_key = f"processed/logs/{system_name}/{file_name}"
+        
+        if source_type.upper() == 'QUALYS':
+            output_key = f"processed/qualys/{system_name}/{file_name}"
+        else:
+            output_key = f"processed/logs/{system_name}/{file_name}"
         
         save_dataframe_to_s3(df, bucket, output_key)
         
