@@ -399,25 +399,35 @@ resource "null_resource" "create_opensearch_index" {
 
   provisioner "local-exec" {
     command = <<-EOT
+      set -e
       HOST=$(echo "${aws_opensearchserverless_collection.kb_collection.collection_endpoint}" | sed 's|https://||')
       
-      for i in 1 2 3 4 5; do
+      echo "Waiting for Policy KB collection to be active..."
+      for i in 1 2 3 4 5 6 7 8 9 10; do
         STATUS=$(aws opensearchserverless batch-get-collection --names compliance-kb-vectors --query 'collectionDetails[0].status' --output text --region ${var.aws_region} 2>/dev/null || echo "CREATING")
+        echo "Attempt $i: Collection status = $STATUS"
         if [ "$STATUS" = "ACTIVE" ]; then
-          echo "Collection is active, creating index..."
+          echo "Collection is active"
           break
         fi
-        echo "Waiting for collection... (attempt $i)"
         sleep 30
       done
       
+      if [ "$STATUS" != "ACTIVE" ]; then
+        echo "ERROR: Collection not active after waiting"
+        exit 1
+      fi
+      
+      echo "Checking if index exists..."
       RESPONSE=$(curl -s -o /dev/null -w "%%{http_code}" -X HEAD "https://$HOST/bedrock-knowledge-base-default-index-v2" --aws-sigv4 "aws:amz:${var.aws_region}:aoss" --user "" 2>/dev/null || echo "000")
+      echo "HEAD response: $RESPONSE"
       if [ "$RESPONSE" = "200" ]; then
         echo "Index already exists"
         exit 0
       fi
       
-      curl -X PUT "https://$HOST/bedrock-knowledge-base-default-index-v2" \
+      echo "Creating Policy KB index..."
+      RESULT=$(curl -s -w "\n%%{http_code}" -X PUT "https://$HOST/bedrock-knowledge-base-default-index-v2" \
         --aws-sigv4 "aws:amz:${var.aws_region}:aoss" --user "" \
         -H "Content-Type: application/json" \
         -d '{
@@ -427,7 +437,18 @@ resource "null_resource" "create_opensearch_index" {
             "AMAZON_BEDROCK_TEXT_CHUNK": {"type": "text"},
             "AMAZON_BEDROCK_METADATA": {"type": "text", "index": false}
           }}
-        }' || echo "Index creation attempted"
+        }')
+      HTTP_CODE=$(echo "$RESULT" | tail -1)
+      BODY=$(echo "$RESULT" | sed '$d')
+      echo "Response: $HTTP_CODE - $BODY"
+      
+      if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "201" ]; then
+        echo "Index created successfully"
+        exit 0
+      else
+        echo "ERROR: Failed to create index"
+        exit 1
+      fi
     EOT
   }
 
@@ -662,25 +683,35 @@ resource "null_resource" "create_soc2_opensearch_index" {
 
   provisioner "local-exec" {
     command = <<-EOT
+      set -e
       HOST=$(echo "${aws_opensearchserverless_collection.soc2_collection.collection_endpoint}" | sed 's|https://||')
       
-      for i in 1 2 3 4 5; do
+      echo "Waiting for SOC2 collection to be active..."
+      for i in 1 2 3 4 5 6 7 8 9 10; do
         STATUS=$(aws opensearchserverless batch-get-collection --names soc2-reports-vectors --query 'collectionDetails[0].status' --output text --region ${var.aws_region} 2>/dev/null || echo "CREATING")
+        echo "Attempt $i: Collection status = $STATUS"
         if [ "$STATUS" = "ACTIVE" ]; then
-          echo "Collection is active, creating index..."
+          echo "Collection is active"
           break
         fi
-        echo "Waiting for collection... (attempt $i)"
         sleep 30
       done
       
+      if [ "$STATUS" != "ACTIVE" ]; then
+        echo "ERROR: Collection not active after waiting"
+        exit 1
+      fi
+      
+      echo "Checking if index exists..."
       RESPONSE=$(curl -s -o /dev/null -w "%%{http_code}" -X HEAD "https://$HOST/bedrock-soc2-index" --aws-sigv4 "aws:amz:${var.aws_region}:aoss" --user "" 2>/dev/null || echo "000")
+      echo "HEAD response: $RESPONSE"
       if [ "$RESPONSE" = "200" ]; then
         echo "Index already exists"
         exit 0
       fi
       
-      curl -X PUT "https://$HOST/bedrock-soc2-index" \
+      echo "Creating SOC2 index..."
+      RESULT=$(curl -s -w "\n%%{http_code}" -X PUT "https://$HOST/bedrock-soc2-index" \
         --aws-sigv4 "aws:amz:${var.aws_region}:aoss" --user "" \
         -H "Content-Type: application/json" \
         -d '{
@@ -690,7 +721,18 @@ resource "null_resource" "create_soc2_opensearch_index" {
             "AMAZON_BEDROCK_TEXT_CHUNK": {"type": "text"},
             "AMAZON_BEDROCK_METADATA": {"type": "text", "index": false}
           }}
-        }' || echo "Index creation attempted"
+        }')
+      HTTP_CODE=$(echo "$RESULT" | tail -1)
+      BODY=$(echo "$RESULT" | sed '$d')
+      echo "Response: $HTTP_CODE - $BODY"
+      
+      if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "201" ]; then
+        echo "Index created successfully"
+        exit 0
+      else
+        echo "ERROR: Failed to create index"
+        exit 1
+      fi
     EOT
   }
 
@@ -817,26 +859,36 @@ resource "null_resource" "create_vapt_opensearch_index" {
   
   provisioner "local-exec" {
     command = <<-EOT
+      set -e
       HOST=$(echo "${aws_opensearchserverless_collection.vapt_collection.collection_endpoint}" | sed 's|https://||')
       
-      for i in 1 2 3 4 5; do
-        STATUS=$(aws opensearchserverless batch-get-collection --names vapt-reports-vectors --query 'collectionDetails[0].status' --output text --region ap-southeast-1 2>/dev/null || echo "CREATING")
+      echo "Waiting for VAPT collection to be active..."
+      for i in 1 2 3 4 5 6 7 8 9 10; do
+        STATUS=$(aws opensearchserverless batch-get-collection --names vapt-reports-vectors --query 'collectionDetails[0].status' --output text --region ${var.aws_region} 2>/dev/null || echo "CREATING")
+        echo "Attempt $i: Collection status = $STATUS"
         if [ "$STATUS" = "ACTIVE" ]; then
-          echo "Collection is active, creating index..."
+          echo "Collection is active"
           break
         fi
-        echo "Waiting for collection... (attempt $i)"
         sleep 30
       done
       
-      RESPONSE=$(curl -s -o /dev/null -w "%%{http_code}" -X HEAD "https://$HOST/bedrock-vapt-index" --aws-sigv4 "aws:amz:ap-southeast-1:aoss" --user "" 2>/dev/null || echo "000")
+      if [ "$STATUS" != "ACTIVE" ]; then
+        echo "ERROR: Collection not active after waiting"
+        exit 1
+      fi
+      
+      echo "Checking if index exists..."
+      RESPONSE=$(curl -s -o /dev/null -w "%%{http_code}" -X HEAD "https://$HOST/bedrock-vapt-index" --aws-sigv4 "aws:amz:${var.aws_region}:aoss" --user "" 2>/dev/null || echo "000")
+      echo "HEAD response: $RESPONSE"
       if [ "$RESPONSE" = "200" ]; then
         echo "Index already exists"
         exit 0
       fi
       
-      curl -X PUT "https://$HOST/bedrock-vapt-index" \
-        --aws-sigv4 "aws:amz:ap-southeast-1:aoss" --user "" \
+      echo "Creating VAPT index..."
+      RESULT=$(curl -s -w "\n%%{http_code}" -X PUT "https://$HOST/bedrock-vapt-index" \
+        --aws-sigv4 "aws:amz:${var.aws_region}:aoss" --user "" \
         -H "Content-Type: application/json" \
         -d '{
           "settings": {"index": {"knn": true}},
@@ -845,7 +897,18 @@ resource "null_resource" "create_vapt_opensearch_index" {
             "AMAZON_BEDROCK_TEXT_CHUNK": {"type": "text"},
             "AMAZON_BEDROCK_METADATA": {"type": "text", "index": false}
           }}
-        }' || echo "Index creation attempted"
+        }')
+      HTTP_CODE=$(echo "$RESULT" | tail -1)
+      BODY=$(echo "$RESULT" | sed '$d')
+      echo "Response: $HTTP_CODE - $BODY"
+      
+      if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "201" ]; then
+        echo "Index created successfully"
+        exit 0
+      else
+        echo "ERROR: Failed to create index"
+        exit 1
+      fi
     EOT
   }
   depends_on = [aws_opensearchserverless_collection.vapt_collection, aws_opensearchserverless_access_policy.vapt_data]
