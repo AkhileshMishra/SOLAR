@@ -240,7 +240,8 @@ resource "aws_iam_role_policy" "log_ingestion_agent" {
           "bedrock:InvokeModel"
         ]
         Resource = [
-          data.aws_bedrock_inference_profile.current.inference_profile_arn
+          data.aws_bedrock_inference_profile.current.inference_profile_arn,
+          "arn:aws:bedrock:${data.aws_region.current.name}::foundation-model/${var.bedrock_model_id}"
         ]
       },
       {
@@ -887,9 +888,10 @@ resource "aws_s3_bucket_notification" "log_upload_trigger" {
   }
   
   lambda_function {
-    lambda_function_arn = aws_lambda_function.log_ingestion_agent.arn
+    lambda_function_arn = aws_lambda_function.vapt_extractor.arn
     events              = ["s3:ObjectCreated:*"]
     filter_prefix       = "inputs/VAPT/"
+    filter_suffix       = ".pdf"
   }
   
   lambda_function {
@@ -901,8 +903,49 @@ resource "aws_s3_bucket_notification" "log_upload_trigger" {
   
   depends_on = [
     aws_lambda_permission.allow_s3_invocation,
-    aws_lambda_permission.allow_s3_policy_trigger
+    aws_lambda_permission.allow_s3_policy_trigger,
+    aws_lambda_permission.allow_s3_vapt_trigger
   ]
+}
+
+################################################################################
+# VAPT PDF Extractor Lambda
+################################################################################
+
+data "archive_file" "vapt_extractor" {
+  type        = "zip"
+  source_dir  = "${path.module}/src/vapt_extractor"
+  output_path = "${path.module}/.terraform/lambda/vapt_extractor.zip"
+}
+
+resource "aws_lambda_function" "vapt_extractor" {
+  filename         = data.archive_file.vapt_extractor.output_path
+  function_name    = "${var.project_name}-vapt-extractor"
+  role             = aws_iam_role.log_ingestion_agent.arn
+  handler          = "lambda_function.lambda_handler"
+  source_code_hash = data.archive_file.vapt_extractor.output_base64sha256
+  runtime          = "python3.11"
+  timeout          = 300
+  memory_size      = 1024
+  
+  layers = [aws_lambda_layer_version.pypdf_layer.arn]
+  
+  environment {
+    variables = {
+      PROJECT_NAME = var.project_name
+      MODEL_ID     = var.bedrock_model_id
+    }
+  }
+  
+  tags = var.tags
+}
+
+resource "aws_lambda_permission" "allow_s3_vapt_trigger" {
+  statement_id  = "AllowExecutionFromS3VAPT"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.vapt_extractor.function_name
+  principal     = "s3.amazonaws.com"
+  source_arn    = aws_s3_bucket.compliance_data.arn
 }
 
 ################################################################################
