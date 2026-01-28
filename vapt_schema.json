@@ -55,10 +55,9 @@
                           "vulnerability_id": {"type": "string"},
                           "title": {"type": "string"},
                           "severity": {"type": "string", "enum": ["CRITICAL", "HIGH", "MEDIUM", "LOW"]},
-                          "identified_date": {"type": "string"},
+                          "identified_date": {"type": "string", "description": "Date vulnerability was identified (YYYY-MM-DD)"},
                           "recommended_fix": {"type": "string"},
-                          "compliance_deadline": {"type": "string"},
-                          "compliance_status": {"type": "string"}
+                          "affected_component": {"type": "string"}
                         }
                       }
                     },

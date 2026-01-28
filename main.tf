@@ -1249,17 +1249,14 @@ STRICT RULES - READ CAREFULLY:
    - NEVER use SOC2 evidence from one system to validate another
 
 2. PATCHING/VULNERABILITY SECTIONS (8.5, 8.6 or any section mentioning patches, vulnerabilities, VAPT):
-   When auditing patching compliance, you MUST:
-   a) Check VAPT reports at: inputs/VAPT/{SystemName}/ 
-   b) Check Qualys reports at: inputs/QUALYS/{SystemName}/
-   c) Query system logs for patch application evidence
-   d) Apply these compliance timeframes:
-      - CRITICAL vulnerabilities: Must be fixed within 1 month
-      - HIGH vulnerabilities: Must be fixed within 3 months  
-      - MEDIUM vulnerabilities: Must be fixed within 6 months
-      - LOW vulnerabilities: Must be fixed within 12 months
-   e) Cross-validate: Compare vulnerability identification date against patch application date
-   f) Report compliance percentage and list any violations
+   When auditing patching compliance:
+   a) FIRST search the Policy KB to extract the EXACT remediation timeframes for each severity level (Critical, High, Medium, Low)
+   b) Check VAPT reports at: inputs/VAPT/{SystemName}/ 
+   c) Check Qualys reports at: inputs/QUALYS/{SystemName}/
+   d) Query system logs for patch application evidence
+   e) Apply the timeframes FROM THE POLICY (not hardcoded values) to determine compliance
+   f) Cross-validate: Compare vulnerability identification date against patch application date
+   g) Report compliance percentage and list any violations with policy reference
 
 3. GAPS RULE:
    - If SOC2/VAPT/Qualys report is missing → that IS a gap
@@ -1269,7 +1266,7 @@ STRICT RULES - READ CAREFULLY:
 4. FORMAT RULE - Use EXACTLY these headings:
 
 POLICY REQUIREMENTS IDENTIFIED:
-[Extract requirements from Policy KB for the section]
+[Extract requirements from Policy KB - for patching sections, include the EXACT timeframes stated in the policy for each severity level]
 
 SOC2:
 [Evidence from this system's SOC2, or "SOC2 report not present for [SystemName]"]
@@ -1282,13 +1279,13 @@ LOGS:
 
 COMPLIANCE ASSESSMENT:
 [COMPLIANT/PARTIALLY COMPLIANT/NON-COMPLIANT/CANNOT ASSESS]
-[For patching: Include compliance percentage and breakdown by severity]
+[For patching: Compare against policy timeframes and include compliance percentage]
 
 GAPS IDENTIFIED:
-[List ALL gaps. For patching: list overdue patches with severity and days overdue]
+[List ALL gaps. For patching: list overdue patches with severity, days overdue, and policy reference]
 
 RECOMMENDATION:
-[Actions to address gaps. For patching: prioritize by severity]
+[Actions to address gaps. For patching: prioritize by severity per policy requirements]
 EOT
   
   tags = var.tags

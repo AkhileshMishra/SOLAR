@@ -7,7 +7,7 @@ import json
 import boto3
 import os
 import re
-from datetime import datetime, timedelta
+from datetime import datetime
 import csv
 import io
 
@@ -16,14 +16,6 @@ bedrock = boto3.client('bedrock-runtime')
 
 BUCKET_NAME = os.environ.get('BUCKET_NAME')
 BEDROCK_MODEL = os.environ.get('BEDROCK_MODEL_ID', 'anthropic.claude-3-5-sonnet-20240620-v1:0')
-
-# Policy compliance timeframes (days)
-COMPLIANCE_TIMEFRAMES = {
-    'CRITICAL': 30,
-    'HIGH': 90,
-    'MEDIUM': 180,
-    'LOW': 365
-}
 
 
 def lambda_handler(event, context):
@@ -73,11 +65,6 @@ def lambda_handler(event, context):
     
     # Merge and deduplicate vulnerabilities
     all_vulnerabilities = merge_vulnerabilities(result['vapt_data'], result['qualys_data'])
-    
-    # Calculate compliance deadlines
-    for vuln in all_vulnerabilities:
-        vuln['compliance_deadline'] = calculate_deadline(vuln)
-        vuln['compliance_status'] = 'PENDING_VALIDATION'
     
     result['vulnerabilities'] = all_vulnerabilities
     result['total_count'] = len(all_vulnerabilities)
@@ -256,22 +243,6 @@ def merge_vulnerabilities(vapt_data, qualys_data):
                 merged[key]['source'] = f"{merged[key]['source']}, {vuln['source']}"
     
     return list(merged.values())
-
-
-def calculate_deadline(vuln):
-    """Calculate compliance deadline based on severity and identification date."""
-    severity = vuln.get('severity', 'MEDIUM')
-    days = COMPLIANCE_TIMEFRAMES.get(severity, 180)
-    
-    identified_date = vuln.get('identified_date', '')
-    if identified_date:
-        try:
-            date_obj = datetime.strptime(identified_date[:10], '%Y-%m-%d')
-            deadline = date_obj + timedelta(days=days)
-            return deadline.strftime('%Y-%m-%d')
-        except:
-            pass
-    return 'UNKNOWN'
 
 
 def count_by_severity(vulnerabilities):
