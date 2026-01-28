@@ -900,6 +900,141 @@ resource "aws_bedrockagent_agent_knowledge_base_association" "soc2_reports" {
   ]
 }
 
+################################################################################
+# VAPT/Qualys Knowledge Base
+################################################################################
+
+resource "aws_opensearchserverless_security_policy" "vapt_encryption" {
+  name        = "vapt-kb-enc"
+  type        = "encryption"
+  policy = jsonencode({
+    Rules = [{ Resource = ["collection/vapt-reports-vectors"], ResourceType = "collection" }]
+    AWSOwnedKey = true
+  })
+}
+
+resource "aws_opensearchserverless_security_policy" "vapt_network" {
+  name        = "vapt-kb-net"
+  type        = "network"
+  policy = jsonencode([{
+    Rules = [{ Resource = ["collection/vapt-reports-vectors"], ResourceType = "collection" }]
+    AllowFromPublic = true
+  }])
+}
+
+resource "aws_opensearchserverless_access_policy" "vapt_data" {
+  name   = "vapt-kb-data"
+  type   = "data"
+  policy = jsonencode([{
+    Rules = [
+      { Resource = ["collection/vapt-reports-vectors"], ResourceType = "collection",
+        Permission = ["aoss:CreateCollectionItems", "aoss:DeleteCollectionItems", "aoss:UpdateCollectionItems", "aoss:DescribeCollectionItems"] },
+      { Resource = ["index/vapt-reports-vectors/*"], ResourceType = "index",
+        Permission = ["aoss:CreateIndex", "aoss:DeleteIndex", "aoss:UpdateIndex", "aoss:DescribeIndex", "aoss:ReadDocument", "aoss:WriteDocument"] }
+    ]
+    Principal = [
+      aws_iam_role.bedrock_kb_role.arn,
+      data.aws_caller_identity.current.arn,
+      "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/KAIZERODeploymentServer",
+      "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/GitHubActions-SOLAR-Deploy"
+    ]
+  }])
+}
+
+resource "aws_opensearchserverless_collection" "vapt_collection" {
+  name = "vapt-reports-vectors"
+  type = "VECTORSEARCH"
+  depends_on = [aws_opensearchserverless_security_policy.vapt_encryption, aws_opensearchserverless_security_policy.vapt_network, aws_opensearchserverless_access_policy.vapt_data]
+}
+
+resource "null_resource" "create_vapt_opensearch_index" {
+  triggers = { collection_endpoint = aws_opensearchserverless_collection.vapt_collection.collection_endpoint }
+  
+  provisioner "local-exec" {
+    command = <<-EOT
+      python3 -c "
+import boto3, requests, time
+from requests_aws4auth import AWS4Auth
+
+session = boto3.Session()
+creds = session.get_credentials().get_frozen_credentials()
+awsauth = AWS4Auth(creds.access_key, creds.secret_key, 'ap-southeast-1', 'aoss', session_token=creds.token)
+
+host = '${aws_opensearchserverless_collection.vapt_collection.collection_endpoint}'.replace('https://', '')
+url = f'https://{host}/bedrock-vapt-index'
+mapping = {
+    'settings': {'index': {'knn': True}},
+    'mappings': {'properties': {
+        'bedrock-knowledge-base-default-vector': {'type': 'knn_vector', 'dimension': 1024, 'method': {'engine': 'faiss', 'name': 'hnsw', 'space_type': 'l2'}},
+        'AMAZON_BEDROCK_TEXT_CHUNK': {'type': 'text'},
+        'AMAZON_BEDROCK_METADATA': {'type': 'text', 'index': False}
+    }}
+}
+
+for attempt in range(5):
+    if requests.head(url, auth=awsauth).status_code == 200:
+        print('Index exists'); exit(0)
+    response = requests.put(url, auth=awsauth, json=mapping, headers={'Content-Type': 'application/json'})
+    if response.status_code in [200, 201]:
+        print('Index created'); exit(0)
+    time.sleep(30)
+"
+    EOT
+  }
+  depends_on = [aws_opensearchserverless_collection.vapt_collection, aws_opensearchserverless_access_policy.vapt_data]
+}
+
+resource "aws_bedrockagent_knowledge_base" "vapt_kb" {
+  name        = "VAPT-Reports-KB"
+  description = "Knowledge Base for VAPT and Qualys vulnerability reports"
+  role_arn    = aws_iam_role.bedrock_kb_role.arn
+
+  knowledge_base_configuration {
+    type = "VECTOR"
+    vector_knowledge_base_configuration {
+      embedding_model_arn = "arn:aws:bedrock:${var.aws_region}::foundation-model/${var.bedrock_embedding_model_id}"
+    }
+  }
+
+  storage_configuration {
+    type = "OPENSEARCH_SERVERLESS"
+    opensearch_serverless_configuration {
+      collection_arn    = aws_opensearchserverless_collection.vapt_collection.arn
+      vector_index_name = "bedrock-vapt-index"
+      field_mapping {
+        vector_field   = "bedrock-knowledge-base-default-vector"
+        text_field     = "AMAZON_BEDROCK_TEXT_CHUNK"
+        metadata_field = "AMAZON_BEDROCK_METADATA"
+      }
+    }
+  }
+
+  depends_on = [aws_iam_role_policy.bedrock_kb_policy, aws_opensearchserverless_collection.vapt_collection, null_resource.create_vapt_opensearch_index]
+}
+
+resource "aws_bedrockagent_data_source" "vapt_documents" {
+  name              = "${var.project_name}-vapt-docs"
+  knowledge_base_id = aws_bedrockagent_knowledge_base.vapt_kb.id
+  description       = "VAPT and Qualys reports from S3"
+
+  data_source_configuration {
+    type = "S3"
+    s3_configuration {
+      bucket_arn         = aws_s3_bucket.compliance_data.arn
+      inclusion_prefixes = ["inputs/VAPT/", "inputs/QUALYS/"]
+    }
+  }
+}
+
+resource "aws_bedrockagent_agent_knowledge_base_association" "vapt_reports" {
+  agent_id             = aws_bedrockagent_agent.compliance_auditor.agent_id
+  agent_version        = "DRAFT"
+  knowledge_base_id    = aws_bedrockagent_knowledge_base.vapt_kb.id
+  description          = "VAPT and Qualys vulnerability reports"
+  knowledge_base_state = "ENABLED"
+  
+  depends_on = [aws_bedrockagent_agent_knowledge_base_association.soc2_reports, aws_bedrockagent_knowledge_base.vapt_kb]
+}
 
 ################################################################################
 # Layer 2: Auto-DDL Ingestion Layer - Lambda Function
@@ -1241,51 +1376,53 @@ resource "aws_bedrockagent_agent" "compliance_auditor" {
   instruction = <<-EOT
 You are an IT Compliance Auditor for Keppel validating against 'Keppel Technology and Cybersecurity Standards (TECH-S01-01)'.
 
-STRICT RULES - READ CAREFULLY:
+You have access to THREE Knowledge Bases:
+1. **Policy KB**: Keppel's internal policy requirements
+2. **SOC2 KB**: Vendor SOC2 reports in inputs/SOCreports/{SystemName}/
+3. **VAPT KB**: VAPT and Qualys vulnerability reports in inputs/VAPT/{SystemName}/ and inputs/QUALYS/{SystemName}/
+
+STRICT RULES:
 
 1. SOC2 EVIDENCE RULE:
-   - Each system has its OWN SOC2 report in: inputs/SOCreports/{SystemName}/
+   - Each system has its OWN SOC2 report
    - If no SOC2 report exists for the exact system name, write: "SOC2 report not present for [SystemName]"
    - NEVER use SOC2 evidence from one system to validate another
 
 2. PATCHING/VULNERABILITY SECTIONS (8.5, 8.6 or any section mentioning patches, vulnerabilities, VAPT):
    When auditing patching compliance:
-   a) FIRST search the Policy KB to extract the EXACT remediation timeframes for each severity level (Critical, High, Medium, Low)
-   b) Check VAPT reports at: inputs/VAPT/{SystemName}/ 
-   c) Check Qualys reports at: inputs/QUALYS/{SystemName}/
-   d) Query system logs for patch application evidence
-   e) Apply the timeframes FROM THE POLICY (not hardcoded values) to determine compliance
-   f) Cross-validate: Compare vulnerability identification date against patch application date
-   g) Report compliance percentage and list any violations with policy reference
+   a) FIRST search Policy KB to extract the EXACT remediation timeframes for each severity level
+   b) Search VAPT KB for vulnerability findings specific to the system being audited
+   c) Query system logs for patch application evidence
+   d) Apply the timeframes FROM THE POLICY to determine compliance
+   e) Report compliance percentage and list violations with policy reference
 
 3. GAPS RULE:
-   - If SOC2/VAPT/Qualys report is missing → that IS a gap
+   - If SOC2/VAPT report is missing → that IS a gap
    - If logs are not available → that IS a gap  
    - ALWAYS list gaps in the GAPS IDENTIFIED section
 
 4. FORMAT RULE - Use EXACTLY these headings:
 
 POLICY REQUIREMENTS IDENTIFIED:
-[Extract requirements from Policy KB - for patching sections, include the EXACT timeframes stated in the policy for each severity level]
+[Extract from Policy KB - for patching, include EXACT timeframes for each severity]
 
 SOC2:
 [Evidence from this system's SOC2, or "SOC2 report not present for [SystemName]"]
 
-VAPT/QUALYS: (Include this section for patching-related audits)
-[Vulnerability findings from VAPT and Qualys reports, or "No VAPT/Qualys reports found for [SystemName]"]
+VAPT/QUALYS:
+[Vulnerability findings from VAPT KB for this system, or "No VAPT/Qualys reports found for [SystemName]"]
 
 LOGS:
-[Query results showing patch application dates, or "No logs available"]
+[Query results, or "No logs available"]
 
 COMPLIANCE ASSESSMENT:
 [COMPLIANT/PARTIALLY COMPLIANT/NON-COMPLIANT/CANNOT ASSESS]
-[For patching: Compare against policy timeframes and include compliance percentage]
 
 GAPS IDENTIFIED:
-[List ALL gaps. For patching: list overdue patches with severity, days overdue, and policy reference]
+[List ALL gaps with policy reference]
 
 RECOMMENDATION:
-[Actions to address gaps. For patching: prioritize by severity per policy requirements]
+[Actions to address gaps]
 EOT
   
   tags = var.tags
@@ -1311,31 +1448,6 @@ resource "aws_bedrockagent_agent_action_group" "query_logs" {
   }
   
   description = "Allows the agent to query Athena views and list available log sources"
-}
-
-resource "aws_bedrockagent_agent_action_group" "vapt_processor" {
-  action_group_name          = "VAPTProcessorActionGroup"
-  agent_id                   = aws_bedrockagent_agent.compliance_auditor.agent_id
-  agent_version              = "DRAFT"
-  skip_resource_in_use_check = true
-  
-  action_group_executor {
-    lambda = aws_lambda_function.vapt_processor.arn
-  }
-  
-  api_schema {
-    payload = file("${path.module}/vapt_schema.json")
-  }
-  
-  description = "Processes VAPT and Qualys reports for vulnerability compliance validation"
-}
-
-resource "aws_lambda_permission" "vapt_processor_bedrock" {
-  statement_id  = "AllowBedrockInvoke"
-  action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.vapt_processor.function_name
-  principal     = "bedrock.amazonaws.com"
-  source_arn    = "${aws_bedrockagent_agent.compliance_auditor.agent_arn}/*"
 }
 
 resource "aws_bedrockagent_agent_knowledge_base_association" "compliance_policy" {
@@ -1575,80 +1687,6 @@ resource "aws_cloudwatch_log_group" "report_generator" {
   retention_in_days = 7
   
   tags = var.tags
-}
-
-################################################################################
-# VAPT/Qualys Processor Lambda
-################################################################################
-
-data "archive_file" "vapt_processor" {
-  type        = "zip"
-  source_dir  = "${path.module}/src/vapt_processor"
-  output_path = "${path.module}/.terraform/lambda/vapt_processor.zip"
-}
-
-resource "aws_lambda_function" "vapt_processor" {
-  filename         = data.archive_file.vapt_processor.output_path
-  function_name    = "${var.project_name}-vapt-processor"
-  role             = aws_iam_role.vapt_processor.arn
-  handler          = "lambda_function.lambda_handler"
-  source_code_hash = data.archive_file.vapt_processor.output_base64sha256
-  runtime          = "python3.11"
-  timeout          = 300
-  memory_size      = 1024
-  
-  environment {
-    variables = {
-      BUCKET_NAME      = aws_s3_bucket.compliance_data.bucket
-      BEDROCK_MODEL_ID = var.bedrock_model_id
-    }
-  }
-  
-  tags = var.tags
-}
-
-resource "aws_iam_role" "vapt_processor" {
-  name = "${var.project_name}-vapt-processor-role"
-  
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Action = "sts:AssumeRole"
-      Effect = "Allow"
-      Principal = { Service = "lambda.amazonaws.com" }
-    }]
-  })
-  
-  tags = var.tags
-}
-
-resource "aws_iam_role_policy" "vapt_processor" {
-  name = "${var.project_name}-vapt-processor-policy"
-  role = aws_iam_role.vapt_processor.id
-  
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Action = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
-        Resource = "arn:aws:logs:*:*:*"
-      },
-      {
-        Effect = "Allow"
-        Action = ["s3:GetObject", "s3:ListBucket"]
-        Resource = [
-          aws_s3_bucket.compliance_data.arn,
-          "${aws_s3_bucket.compliance_data.arn}/*"
-        ]
-      },
-      {
-        Effect = "Allow"
-        Action = ["bedrock:InvokeModel"]
-        Resource = "*"
-      }
-    ]
-  })
 }
 
 resource "aws_glue_crawler" "compliance_crawler" {
