@@ -399,7 +399,7 @@ resource "null_resource" "create_opensearch_index" {
 
   provisioner "local-exec" {
     command = <<-EOT
-      set -e
+      set -ex
       pip3 install awscurl --quiet
       
       echo "Waiting for Policy KB collection to be active..."
@@ -413,19 +413,25 @@ resource "null_resource" "create_opensearch_index" {
       [ "$STATUS" != "ACTIVE" ] && echo "ERROR: Collection not active" && exit 1
       
       ENDPOINT="${aws_opensearchserverless_collection.kb_collection.collection_endpoint}"
+      INDEX_NAME="bedrock-knowledge-base-default-index-v2"
       
-      echo "Checking if index exists..."
-      if awscurl --service aoss --region ${var.aws_region} -X HEAD "$ENDPOINT/bedrock-knowledge-base-default-index-v2" 2>/dev/null; then
-        echo "Index already exists"
-        exit 0
-      fi
-      
-      echo "Creating Policy KB index..."
-      awscurl --service aoss --region ${var.aws_region} -X PUT "$ENDPOINT/bedrock-knowledge-base-default-index-v2" \
+      echo "Creating Policy KB index (will fail silently if exists)..."
+      RESULT=$(awscurl --service aoss --region ${var.aws_region} -X PUT "$ENDPOINT/$INDEX_NAME" \
         -H "Content-Type: application/json" \
-        -d '{"settings":{"index":{"knn":true}},"mappings":{"properties":{"bedrock-knowledge-base-default-vector":{"type":"knn_vector","dimension":1024,"method":{"engine":"faiss","name":"hnsw","space_type":"l2"}},"AMAZON_BEDROCK_TEXT_CHUNK":{"type":"text"},"AMAZON_BEDROCK_METADATA":{"type":"text","index":false}}}}'
+        -d '{"settings":{"index":{"knn":true}},"mappings":{"properties":{"bedrock-knowledge-base-default-vector":{"type":"knn_vector","dimension":1024,"method":{"engine":"faiss","name":"hnsw","space_type":"l2"}},"AMAZON_BEDROCK_TEXT_CHUNK":{"type":"text"},"AMAZON_BEDROCK_METADATA":{"type":"text","index":false}}}}' 2>&1) || true
+      echo "PUT result: $RESULT"
       
-      echo "Index created"
+      echo "Verifying index exists..."
+      VERIFY=$(awscurl --service aoss --region ${var.aws_region} -X GET "$ENDPOINT/_cat/indices" 2>&1) || true
+      echo "Indices: $VERIFY"
+      
+      if echo "$VERIFY" | grep -q "$INDEX_NAME"; then
+        echo "Index verified"
+        exit 0
+      else
+        echo "ERROR: Index not found after creation"
+        exit 1
+      fi
     EOT
   }
 
@@ -660,7 +666,7 @@ resource "null_resource" "create_soc2_opensearch_index" {
 
   provisioner "local-exec" {
     command = <<-EOT
-      set -e
+      set -ex
       pip3 install awscurl --quiet
       
       echo "Waiting for SOC2 collection to be active..."
@@ -674,19 +680,25 @@ resource "null_resource" "create_soc2_opensearch_index" {
       [ "$STATUS" != "ACTIVE" ] && echo "ERROR: Collection not active" && exit 1
       
       ENDPOINT="${aws_opensearchserverless_collection.soc2_collection.collection_endpoint}"
+      INDEX_NAME="bedrock-soc2-index"
       
-      echo "Checking if index exists..."
-      if awscurl --service aoss --region ${var.aws_region} -X HEAD "$ENDPOINT/bedrock-soc2-index" 2>/dev/null; then
-        echo "Index already exists"
-        exit 0
-      fi
-      
-      echo "Creating SOC2 index..."
-      awscurl --service aoss --region ${var.aws_region} -X PUT "$ENDPOINT/bedrock-soc2-index" \
+      echo "Creating SOC2 index (will fail silently if exists)..."
+      RESULT=$(awscurl --service aoss --region ${var.aws_region} -X PUT "$ENDPOINT/$INDEX_NAME" \
         -H "Content-Type: application/json" \
-        -d '{"settings":{"index":{"knn":true}},"mappings":{"properties":{"bedrock-knowledge-base-default-vector":{"type":"knn_vector","dimension":1024,"method":{"engine":"faiss","name":"hnsw","space_type":"l2"}},"AMAZON_BEDROCK_TEXT_CHUNK":{"type":"text"},"AMAZON_BEDROCK_METADATA":{"type":"text","index":false}}}}'
+        -d '{"settings":{"index":{"knn":true}},"mappings":{"properties":{"bedrock-knowledge-base-default-vector":{"type":"knn_vector","dimension":1024,"method":{"engine":"faiss","name":"hnsw","space_type":"l2"}},"AMAZON_BEDROCK_TEXT_CHUNK":{"type":"text"},"AMAZON_BEDROCK_METADATA":{"type":"text","index":false}}}}' 2>&1) || true
+      echo "PUT result: $RESULT"
       
-      echo "Index created"
+      echo "Verifying index exists..."
+      VERIFY=$(awscurl --service aoss --region ${var.aws_region} -X GET "$ENDPOINT/_cat/indices" 2>&1) || true
+      echo "Indices: $VERIFY"
+      
+      if echo "$VERIFY" | grep -q "$INDEX_NAME"; then
+        echo "Index verified"
+        exit 0
+      else
+        echo "ERROR: Index not found after creation"
+        exit 1
+      fi
     EOT
   }
 
@@ -813,7 +825,7 @@ resource "null_resource" "create_vapt_opensearch_index" {
   
   provisioner "local-exec" {
     command = <<-EOT
-      set -e
+      set -ex
       pip3 install awscurl --quiet
       
       echo "Waiting for VAPT collection to be active..."
@@ -827,19 +839,25 @@ resource "null_resource" "create_vapt_opensearch_index" {
       [ "$STATUS" != "ACTIVE" ] && echo "ERROR: Collection not active" && exit 1
       
       ENDPOINT="${aws_opensearchserverless_collection.vapt_collection.collection_endpoint}"
+      INDEX_NAME="bedrock-vapt-index"
       
-      echo "Checking if index exists..."
-      if awscurl --service aoss --region ${var.aws_region} -X HEAD "$ENDPOINT/bedrock-vapt-index" 2>/dev/null; then
-        echo "Index already exists"
-        exit 0
-      fi
-      
-      echo "Creating VAPT index..."
-      awscurl --service aoss --region ${var.aws_region} -X PUT "$ENDPOINT/bedrock-vapt-index" \
+      echo "Creating VAPT index (will fail silently if exists)..."
+      RESULT=$(awscurl --service aoss --region ${var.aws_region} -X PUT "$ENDPOINT/$INDEX_NAME" \
         -H "Content-Type: application/json" \
-        -d '{"settings":{"index":{"knn":true}},"mappings":{"properties":{"bedrock-knowledge-base-default-vector":{"type":"knn_vector","dimension":1024,"method":{"engine":"faiss","name":"hnsw","space_type":"l2"}},"AMAZON_BEDROCK_TEXT_CHUNK":{"type":"text"},"AMAZON_BEDROCK_METADATA":{"type":"text","index":false}}}}'
+        -d '{"settings":{"index":{"knn":true}},"mappings":{"properties":{"bedrock-knowledge-base-default-vector":{"type":"knn_vector","dimension":1024,"method":{"engine":"faiss","name":"hnsw","space_type":"l2"}},"AMAZON_BEDROCK_TEXT_CHUNK":{"type":"text"},"AMAZON_BEDROCK_METADATA":{"type":"text","index":false}}}}' 2>&1) || true
+      echo "PUT result: $RESULT"
       
-      echo "Index created"
+      echo "Verifying index exists..."
+      VERIFY=$(awscurl --service aoss --region ${var.aws_region} -X GET "$ENDPOINT/_cat/indices" 2>&1) || true
+      echo "Indices: $VERIFY"
+      
+      if echo "$VERIFY" | grep -q "$INDEX_NAME"; then
+        echo "Index verified"
+        exit 0
+      else
+        echo "ERROR: Index not found after creation"
+        exit 1
+      fi
     EOT
   }
   depends_on = [aws_opensearchserverless_collection.vapt_collection, aws_opensearchserverless_access_policy.vapt_data]
