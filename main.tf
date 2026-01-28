@@ -807,162 +807,6 @@ resource "aws_bedrockagent_agent_knowledge_base_association" "soc2_reports" {
 # VAPT/Qualys Knowledge Base
 ################################################################################
 
-resource "aws_opensearchserverless_security_policy" "vapt_encryption" {
-  name        = "vapt-kb-enc"
-  type        = "encryption"
-  policy = jsonencode({
-    Rules = [{ Resource = ["collection/vapt-reports-vectors"], ResourceType = "collection" }]
-    AWSOwnedKey = true
-  })
-}
-
-resource "aws_opensearchserverless_security_policy" "vapt_network" {
-  name        = "vapt-kb-net"
-  type        = "network"
-  policy = jsonencode([{
-    Rules = [{ Resource = ["collection/vapt-reports-vectors"], ResourceType = "collection" }]
-    AllowFromPublic = true
-  }])
-}
-
-resource "aws_opensearchserverless_access_policy" "vapt_data" {
-  name   = "vapt-kb-data"
-  type   = "data"
-  policy = jsonencode([{
-    Rules = [
-      { Resource = ["collection/vapt-reports-vectors"], ResourceType = "collection",
-        Permission = ["aoss:CreateCollectionItems", "aoss:DeleteCollectionItems", "aoss:UpdateCollectionItems", "aoss:DescribeCollectionItems"] },
-      { Resource = ["index/vapt-reports-vectors/*"], ResourceType = "index",
-        Permission = ["aoss:CreateIndex", "aoss:DeleteIndex", "aoss:UpdateIndex", "aoss:DescribeIndex", "aoss:ReadDocument", "aoss:WriteDocument"] }
-    ]
-    Principal = [
-      aws_iam_role.bedrock_kb_role.arn,
-      data.aws_caller_identity.current.arn,
-      "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/KAIZERODeploymentServer",
-      "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/GitHubActions-SOLAR-Deploy"
-    ]
-  }])
-}
-
-resource "aws_opensearchserverless_collection" "vapt_collection" {
-  name = "vapt-reports-vectors"
-  type = "VECTORSEARCH"
-  depends_on = [aws_opensearchserverless_security_policy.vapt_encryption, aws_opensearchserverless_security_policy.vapt_network, aws_opensearchserverless_access_policy.vapt_data]
-}
-
-resource "null_resource" "create_vapt_opensearch_index" {
-  triggers = {
-    collection_endpoint = aws_opensearchserverless_collection.vapt_collection.collection_endpoint
-    always_run = timestamp()
-  }
-  
-  provisioner "local-exec" {
-    command = <<-EOT
-      set -ex
-      pip3 install awscurl --quiet
-      
-      echo "Waiting for VAPT collection to be active..."
-      for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
-        STATUS=$(aws opensearchserverless batch-get-collection --names vapt-reports-vectors --query 'collectionDetails[0].status' --output text --region ${var.aws_region} 2>/dev/null || echo "CREATING")
-        echo "Attempt $i: Collection status = $STATUS"
-        if [ "$STATUS" = "ACTIVE" ]; then break; fi
-        sleep 30
-      done
-      
-      [ "$STATUS" != "ACTIVE" ] && echo "ERROR: Collection not active" && exit 1
-      
-      echo "Waiting 60s for access policies to propagate..."
-      sleep 60
-      
-      ENDPOINT="${aws_opensearchserverless_collection.vapt_collection.collection_endpoint}"
-      INDEX_NAME="bedrock-vapt-index"
-      
-      echo "Creating VAPT index..."
-      for attempt in 1 2 3 4 5; do
-        RESULT=$(awscurl --service aoss --region ${var.aws_region} -X PUT "$ENDPOINT/$INDEX_NAME" \
-          -H "Content-Type: application/json" \
-          -d '{"settings":{"index":{"knn":true}},"mappings":{"properties":{"bedrock-knowledge-base-default-vector":{"type":"knn_vector","dimension":1024,"method":{"engine":"faiss","name":"hnsw","space_type":"l2"}},"AMAZON_BEDROCK_TEXT_CHUNK":{"type":"text"},"AMAZON_BEDROCK_METADATA":{"type":"text","index":false}}}}' 2>&1) || true
-        echo "Attempt $attempt PUT result: $RESULT"
-        
-        if echo "$RESULT" | grep -q "acknowledged"; then
-          echo "Index created successfully"
-          break
-        elif echo "$RESULT" | grep -q "resource_already_exists"; then
-          echo "Index already exists"
-          break
-        fi
-        echo "Retrying in 30s..."
-        sleep 30
-      done
-      
-      echo "Verifying index exists..."
-      VERIFY=$(awscurl --service aoss --region ${var.aws_region} -X GET "$ENDPOINT/_cat/indices" 2>&1) || true
-      echo "Indices: $VERIFY"
-      
-      if echo "$VERIFY" | grep -q "$INDEX_NAME"; then
-        echo "Index verified"
-        exit 0
-      else
-        echo "ERROR: Index not found after creation"
-        exit 1
-      fi
-    EOT
-  }
-  depends_on = [aws_opensearchserverless_collection.vapt_collection, aws_opensearchserverless_access_policy.vapt_data]
-}
-
-resource "aws_bedrockagent_knowledge_base" "vapt_kb" {
-  name        = "VAPT-Reports-KB"
-  description = "Knowledge Base for VAPT and Qualys vulnerability reports"
-  role_arn    = aws_iam_role.bedrock_kb_role.arn
-
-  knowledge_base_configuration {
-    type = "VECTOR"
-    vector_knowledge_base_configuration {
-      embedding_model_arn = "arn:aws:bedrock:${var.aws_region}::foundation-model/${var.bedrock_embedding_model_id}"
-    }
-  }
-
-  storage_configuration {
-    type = "OPENSEARCH_SERVERLESS"
-    opensearch_serverless_configuration {
-      collection_arn    = aws_opensearchserverless_collection.vapt_collection.arn
-      vector_index_name = "bedrock-vapt-index"
-      field_mapping {
-        vector_field   = "bedrock-knowledge-base-default-vector"
-        text_field     = "AMAZON_BEDROCK_TEXT_CHUNK"
-        metadata_field = "AMAZON_BEDROCK_METADATA"
-      }
-    }
-  }
-
-  depends_on = [aws_iam_role_policy.bedrock_kb_policy, aws_opensearchserverless_collection.vapt_collection, null_resource.create_vapt_opensearch_index]
-}
-
-resource "aws_bedrockagent_data_source" "vapt_documents" {
-  name              = "${var.project_name}-vapt-docs"
-  knowledge_base_id = aws_bedrockagent_knowledge_base.vapt_kb.id
-  description       = "VAPT reports from S3"
-
-  data_source_configuration {
-    type = "S3"
-    s3_configuration {
-      bucket_arn         = aws_s3_bucket.compliance_data.arn
-      inclusion_prefixes = ["inputs/VAPT/"]
-    }
-  }
-}
-
-resource "aws_bedrockagent_agent_knowledge_base_association" "vapt_reports" {
-  agent_id             = aws_bedrockagent_agent.compliance_auditor.agent_id
-  agent_version        = "DRAFT"
-  knowledge_base_id    = aws_bedrockagent_knowledge_base.vapt_kb.id
-  description          = "VAPT and Qualys vulnerability reports"
-  knowledge_base_state = "ENABLED"
-  
-  depends_on = [aws_bedrockagent_agent_knowledge_base_association.soc2_reports, aws_bedrockagent_knowledge_base.vapt_kb]
-}
-
 ################################################################################
 # Layer 2: Auto-DDL Ingestion Layer - Lambda Function
 ################################################################################
@@ -1040,6 +884,12 @@ resource "aws_s3_bucket_notification" "log_upload_trigger" {
     lambda_function_arn = aws_lambda_function.log_ingestion_agent.arn
     events              = ["s3:ObjectCreated:*"]
     filter_prefix       = "inputs/QUALYS/"
+  }
+  
+  lambda_function {
+    lambda_function_arn = aws_lambda_function.log_ingestion_agent.arn
+    events              = ["s3:ObjectCreated:*"]
+    filter_prefix       = "inputs/VAPT/"
   }
   
   lambda_function {
@@ -1312,8 +1162,7 @@ You are an IT Compliance Auditor for Keppel validating against 'Keppel Technolog
 You have access to:
 - **Policy KB**: Keppel's internal policy requirements
 - **SOC2 KB**: Vendor SOC2 reports (PDF) in inputs/SOCreports/{SystemName}/
-- **VAPT KB**: VAPT vulnerability reports (PDF) in inputs/VAPT/{SystemName}/
-- **Athena**: System logs and Qualys data (CSV/XLSX) - query tables in compliance_db
+- **Athena**: System logs, VAPT data, and Qualys data - query tables in compliance_db
 
 STRICT RULES:
 
@@ -1325,14 +1174,15 @@ STRICT RULES:
 2. PATCHING/VULNERABILITY SECTIONS (8.5, 8.6 or any section mentioning patches, vulnerabilities, VAPT):
    When auditing patching compliance:
    a) FIRST search Policy KB to extract the EXACT remediation timeframes for each severity level
-   b) Search VAPT KB for vulnerability findings specific to the system
+   b) Query Athena table 'vapt_{system_name}' for VAPT vulnerability findings
    c) Query Athena table 'qualys_{system_name}' for Qualys vulnerability data
    d) Query system logs for patch application evidence
    e) Apply the timeframes FROM THE POLICY to determine compliance
 
 3. GAPS RULE:
-   - If SOC2/VAPT report is missing → that IS a gap
-   - If logs/Qualys data not available → that IS a gap  
+   - If SOC2 report is missing → that IS a gap
+   - If VAPT/Qualys data not available → that IS a gap  
+   - If logs not available → that IS a gap
    - ALWAYS list gaps in the GAPS IDENTIFIED section
 
 4. FORMAT RULE - Use EXACTLY these headings:
@@ -1344,7 +1194,7 @@ SOC2:
 [Evidence from this system's SOC2, or "SOC2 report not present for [SystemName]"]
 
 VAPT/QUALYS:
-[VAPT KB findings + Qualys Athena query results, or "No VAPT/Qualys data found for [SystemName]"]
+[Athena query results from vapt_ and qualys_ tables, or "No VAPT/Qualys data found for [SystemName]"]
 
 LOGS:
 [Query results, or "No logs available"]
@@ -1634,6 +1484,10 @@ resource "aws_glue_crawler" "compliance_crawler" {
 
   s3_target {
     path = "s3://${aws_s3_bucket.compliance_data.bucket}/processed/qualys/"
+  }
+  
+  s3_target {
+    path = "s3://${aws_s3_bucket.compliance_data.bucket}/processed/vapt/"
   }
   
   schema_change_policy {

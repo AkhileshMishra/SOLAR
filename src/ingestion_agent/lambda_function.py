@@ -38,6 +38,8 @@ def lambda_handler(event, context):
         
         if source_type.upper() == 'QUALYS':
             output_key = f"processed/qualys/{system_name}/{file_name}"
+        elif source_type.upper() == 'VAPT':
+            output_key = f"processed/vapt/{system_name}/{file_name}"
         else:
             output_key = f"processed/logs/{system_name}/{file_name}"
         
