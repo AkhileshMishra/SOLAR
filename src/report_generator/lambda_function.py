@@ -284,15 +284,15 @@ def create_html_report(policy_file, system_name, findings):
             
             <h4>Evidence Search Findings</h4>
             <div class="section-box evidence">
-                <div class="evidence-label">1. SOC2 Report (if available)</div>
+                <div class="evidence-label">1. SOC2 Report</div>
                 <div class="content">{parsed['soc2_evidence'] or '<span class="na">No SOC2 evidence found</span>'}</div>
             </div>
             <div class="section-box evidence">
-                <div class="evidence-label">2. VAPT/Qualys Reports (if available)</div>
+                <div class="evidence-label">2. VAPT/Qualys Reports</div>
                 <div class="content">{parsed['vapt_qualys'] or '<span class="na">No VAPT/Qualys data found</span>'}</div>
             </div>
             <div class="section-box evidence">
-                <div class="evidence-label">3. System Logs (if available)</div>
+                <div class="evidence-label">3. System Logs</div>
                 <div class="content">{parsed['logs_evidence'] or '<span class="na">No log evidence found</span>'}</div>
             </div>
             
@@ -389,15 +389,15 @@ def add_detailed_findings(doc, findings, system_name=''):
             # Evidence Search Findings
             doc.add_heading('EVIDENCE SEARCH FINDINGS', 3)
             p1 = doc.add_paragraph()
-            p1.add_run('1. SOC2 Report (if available): ').bold = True
+            p1.add_run('1. SOC2 Report: ').bold = True
             p1.add_run(parsed['soc2_evidence'] or 'No SOC2 evidence found')
             
             p2 = doc.add_paragraph()
-            p2.add_run('2. VAPT/Qualys Reports (if available): ').bold = True
+            p2.add_run('2. VAPT/Qualys Reports: ').bold = True
             p2.add_run(parsed['vapt_qualys'] or 'No VAPT/Qualys data found')
             
             p3 = doc.add_paragraph()
-            p3.add_run('3. System Logs (if available): ').bold = True
+            p3.add_run('3. System Logs: ').bold = True
             p3.add_run(parsed['logs_evidence'] or 'No log evidence found')
             
             # Compliance Assessment
