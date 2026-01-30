@@ -61,6 +61,7 @@ jobs:
           terraform_wrapper: false
 
       - name: Terraform Init
+        working-directory: infrastructure
         run: |
           terraform init \
             -backend-config="bucket=${{ steps.setup.outputs.STATE_BUCKET }}" \
@@ -69,6 +70,7 @@ jobs:
             -backend-config="encrypt=true"
 
       - name: Force Unlock
+        working-directory: infrastructure
         run: |
           if [ -z "${{ github.event.inputs.lock_id }}" ]; then
             echo "Error: lock_id is required for force-unlock action"
@@ -226,6 +228,7 @@ jobs:
       # 9. Terraform Init
       # ----------------------------------------
       - name: Terraform Init
+        working-directory: infrastructure
         run: |
           terraform init \
             -backend-config="bucket=${{ steps.bootstrap.outputs.STATE_BUCKET }}" \
@@ -278,18 +281,21 @@ jobs:
       # 11. Terraform Plan
       # ----------------------------------------
       - name: Terraform Plan
+        working-directory: infrastructure
         run: terraform plan -out=tfplan
 
       # ----------------------------------------
       # 12. Terraform Apply
       # ----------------------------------------
       - name: Terraform Apply
+        working-directory: infrastructure
         run: terraform apply -auto-approve tfplan
 
       # ----------------------------------------
       # 12.5 Prepare Bedrock Agent (Required after schema changes)
       # ----------------------------------------
       - name: Prepare Bedrock Agent
+        working-directory: infrastructure
         run: |
           AGENT_ID=$(terraform output -raw bedrock_agent_id)
           echo "Preparing agent: $AGENT_ID"
@@ -307,6 +313,7 @@ jobs:
       # 12.6 Sync Knowledge Bases
       # ----------------------------------------
       - name: Sync Knowledge Bases
+        working-directory: infrastructure
         run: |
           # Sync Policy KB
           POLICY_KB_ID=$(terraform output -raw knowledge_base_id)
@@ -337,6 +344,7 @@ jobs:
       # ----------------------------------------
       - name: Get Terraform Outputs
         id: tf_outputs
+        working-directory: infrastructure
         run: |
           FRONTEND_BUCKET=$(terraform output -raw frontend_bucket_name)
           CLOUDFRONT_ID=$(terraform output -raw cloudfront_distribution_id)

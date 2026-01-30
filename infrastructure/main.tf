@@ -797,8 +797,8 @@ resource "aws_bedrockagent_agent_knowledge_base_association" "soc2_reports" {
 
 data "archive_file" "log_ingestion_agent" {
   type        = "zip"
-  source_dir  = "${path.module}/src/ingestion_agent"
-  output_path = "${path.module}/.terraform/lambda/log_ingestion_agent.zip"
+  source_dir  = "${path.module}/../backend/lambdas/ingestion_agent"
+  output_path = "${path.module}/../.terraform/lambda/log_ingestion_agent.zip"
 }
 
 resource "aws_lambda_function" "log_ingestion_agent" {
@@ -825,12 +825,12 @@ resource "aws_lambda_function" "log_ingestion_agent" {
   tags = var.tags
 }
 resource "aws_lambda_layer_version" "pypdf_layer" {
-  filename            = "${path.module}/.terraform/layers/pypdf-layer.zip"
+  filename            = "${path.module}/../.terraform/layers/pypdf-layer.zip"
   layer_name          = "${var.project_name}-pypdf-layer"
   compatible_runtimes = ["python3.11"]
   description         = "pypdf library for parsing SOC reports"
   
-  source_code_hash    = filebase64sha256("${path.module}/.terraform/layers/pypdf-layer.zip")
+  source_code_hash    = filebase64sha256("${path.module}/../.terraform/layers/pypdf-layer.zip")
 }
 resource "aws_cloudwatch_log_group" "log_ingestion_agent" {
   name              = "/aws/lambda/${aws_lambda_function.log_ingestion_agent.function_name}"
@@ -897,8 +897,8 @@ resource "aws_s3_bucket_notification" "log_upload_trigger" {
 
 data "archive_file" "vapt_extractor" {
   type        = "zip"
-  source_dir  = "${path.module}/src/vapt_extractor"
-  output_path = "${path.module}/.terraform/lambda/vapt_extractor.zip"
+  source_dir  = "${path.module}/../backend/lambdas/vapt_extractor"
+  output_path = "${path.module}/../.terraform/lambda/vapt_extractor.zip"
 }
 
 resource "aws_lambda_function" "vapt_extractor" {
@@ -1057,8 +1057,8 @@ resource "aws_iam_role_policy" "agent_athena_executor" {
 }
 data "archive_file" "agent_athena_executor" {
   type        = "zip"
-  source_dir  = "${path.module}/src/agent_athena_executor"
-  output_path = "${path.module}/.terraform/lambda/agent_athena_executor.zip"
+  source_dir  = "${path.module}/../backend/lambdas/agent_athena_executor"
+  output_path = "${path.module}/../.terraform/lambda/agent_athena_executor.zip"
 }
 
 resource "aws_lambda_function" "agent_athena_executor" {
@@ -1362,8 +1362,8 @@ resource "aws_iam_role_policy" "policy_section_fetcher" {
 
 data "archive_file" "policy_section_fetcher" {
   type        = "zip"
-  source_dir  = "${path.module}/src/policy_section_fetcher"
-  output_path = "${path.module}/.terraform/lambda/policy_section_fetcher.zip"
+  source_dir  = "${path.module}/../backend/lambdas/policy_section_fetcher"
+  output_path = "${path.module}/../.terraform/lambda/policy_section_fetcher.zip"
 }
 
 resource "aws_lambda_function" "policy_section_fetcher" {
@@ -1445,7 +1445,7 @@ resource "aws_iam_role_policy" "report_generator" {
 }
 
 resource "aws_lambda_layer_version" "python_docx" {
-  filename            = "${path.module}/.terraform/layers/python-docx.zip"
+  filename            = "${path.module}/../.terraform/layers/python-docx.zip"
   layer_name          = "${var.project_name}-python-docx"
   compatible_runtimes = ["python3.11"]
   description         = "Python-docx library for generating Word documents"
@@ -1456,18 +1456,18 @@ resource "aws_lambda_layer_version" "python_docx" {
 }
 
 resource "aws_lambda_layer_version" "pandas_layer" {
-  filename            = "${path.module}/.terraform/layers/pandas-layer.zip"
+  filename            = "${path.module}/../.terraform/layers/pandas-layer.zip"
   layer_name          = "${var.project_name}-pandas-layer"
   compatible_runtimes = ["python3.11"]
   description         = "Pandas and OpenPyXL for Excel processing"
   
-  source_code_hash    = filebase64sha256("${path.module}/.terraform/layers/pandas-layer.zip")
+  source_code_hash    = filebase64sha256("${path.module}/../.terraform/layers/pandas-layer.zip")
 }
 
 data "archive_file" "report_generator" {
   type        = "zip"
-  source_dir  = "${path.module}/src/report_generator"
-  output_path = "${path.module}/.terraform/lambda/report_generator.zip"
+  source_dir  = "${path.module}/../backend/lambdas/report_generator"
+  output_path = "${path.module}/../.terraform/lambda/report_generator.zip"
 }
 
 resource "aws_lambda_function" "report_generator" {
@@ -1647,7 +1647,7 @@ resource "aws_lambda_function" "pair_builder" {
 
 data "archive_file" "pair_builder_zip" {
   type        = "zip"
-  output_path = "${path.module}/.terraform/lambda/pair_builder.zip"
+  output_path = "${path.module}/../.terraform/lambda/pair_builder.zip"
   source {
     content  = <<EOF
 def lambda_handler(event, context):
@@ -1668,7 +1668,7 @@ EOF
 
 data "archive_file" "agent_invoker_zip" {
   type        = "zip"
-  output_path = "${path.module}/.terraform/lambda/agent_invoker.zip"
+  output_path = "${path.module}/../.terraform/lambda/agent_invoker.zip"
   source {
     content  = <<EOF
 import boto3
