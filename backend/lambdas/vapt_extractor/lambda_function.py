@@ -4,7 +4,7 @@ import os
 import logging
 import urllib.parse
 import io
-import PyPDF2
+from pypdf import PdfReader
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -49,9 +49,9 @@ def lambda_handler(event, context):
 def extract_pdf_text(bucket, key):
     try:
         response = s3.get_object(Bucket=bucket, Key=key)
-        pdf_reader = PyPDF2.PdfReader(io.BytesIO(response['Body'].read()))
+        reader = PdfReader(io.BytesIO(response['Body'].read()))
         text = ""
-        for page in pdf_reader.pages:
+        for page in reader.pages:
             text += page.extract_text() + "\n"
         return text[:50000]  # Limit to 50k chars for LLM context
     except Exception as e:
