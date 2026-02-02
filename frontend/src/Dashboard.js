@@ -397,7 +397,7 @@ const Dashboard = ({ user, signOut }) => {
                       return (
                         <TableRow key={idx}>
                           <TableCell>{f.section || '-'}</TableCell>
-                          <TableCell>{selectedSystem || '-'}</TableCell>
+                          <TableCell>{f.system_name || selectedSystem || '-'}</TableCell>
                           <TableCell>{f.soc_report ? 'Y' : 'N'}</TableCell>
                           <TableCell>{f.patch_log ? 'Y' : 'N'}</TableCell>
                           <TableCell>
