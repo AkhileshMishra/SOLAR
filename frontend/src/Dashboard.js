@@ -248,7 +248,6 @@ const Dashboard = ({ user, signOut }) => {
           setProgressMessage('Report generated successfully!');
           const output = JSON.parse(statusData.output);
           const docxKey = output.report_location.replace(`s3://${BUCKET_NAME}/`, '');
-          const htmlKey = output.html_key; // New: HTML key from Lambda
           const reportFindings = output.findings || [];
           
           setFindings(reportFindings);
