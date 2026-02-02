@@ -1204,12 +1204,12 @@ You are an IT Compliance Auditor for Keppel validating against 'Keppel Technolog
 
 **Step 2: Check for Vulnerabilities (VAPT/Qualys)**
 - Query: SELECT * FROM vapt_{system} LIMIT 20
-- Query: SELECT * FROM qualys WHERE LOWER(hostname) LIKE '%{system}%' LIMIT 20
+- Query: SELECT * FROM qualys WHERE LOWER(hostname) LIKE '%%{system}%%' LIMIT 20
 - If tables don't exist, state: "No VAPT/Qualys data available for [SystemName]"
 - Extract: CVE IDs, severity, affected hosts, dates found
 
 **Step 3: Check for Patch Evidence**
-- Query system logs: SELECT * FROM {system} WHERE LOWER(col0) LIKE '%patch%' OR LOWER(col0) LIKE '%kb%' OR LOWER(col0) LIKE '%update%' LIMIT 50
+- Query system logs: SELECT * FROM {system} WHERE LOWER(col0) LIKE '%%patch%%' OR LOWER(col0) LIKE '%%kb%%' OR LOWER(col0) LIKE '%%update%%' LIMIT 50
 - Look for: KB numbers (e.g., KB5065687), patch dates, security updates
 - If no logs, state: "No patch logs available for [SystemName]"
 
