@@ -56,7 +56,6 @@ const Dashboard = ({ user, signOut }) => {
 
   // Report view state
   const [showReportView, setShowReportView] = useState(false);
-  const [reportContent, setReportContent] = useState('');
 
   // Progress modal state
   const [progressOpen, setProgressOpen] = useState(false);
@@ -174,18 +173,6 @@ const Dashboard = ({ user, signOut }) => {
     return s3.getSignedUrl('getObject', { Bucket: BUCKET_NAME, Key: s3Key, Expires: 3600 });
   };
 
-  const fetchReportContent = async (s3Key) => {
-    const s3 = new S3();
-    try {
-      const data = await s3.getObject({ Bucket: BUCKET_NAME, Key: s3Key }).promise();
-      const content = data.Body.toString('utf-8');
-      setReportContent(content);
-    } catch (err) {
-      console.error('Error fetching report content:', err);
-      setReportContent('Error loading report content');
-    }
-  };
-
   const analyzePolicy = async () => {
     if (!selectedPolicy) return;
     setLoading(true);
@@ -272,11 +259,6 @@ const Dashboard = ({ user, signOut }) => {
           // Save to history
           await saveAuditHistory(docxKey, selectedSections.map(s => s.section), prompts);
           
-          // Fetch HTML report content for display
-          if (htmlKey) {
-            await fetchReportContent(htmlKey);
-          }
-          
           isRunning = false;
           // Close modal and show report view
           setTimeout(() => {
@@ -307,7 +289,7 @@ const Dashboard = ({ user, signOut }) => {
 
     setLoading(true);
     setReportUrl('');
-    setReportContent('');
+    setFindings([]);
     setShowReportView(false);
     setProgressOpen(true);
     setCurrentStage(0);
@@ -352,7 +334,7 @@ const Dashboard = ({ user, signOut }) => {
   const handleCloseReport = () => {
     setShowReportView(false);
     setReportUrl('');
-    setReportContent('');
+    setFindings([]);
     setSelectedSections([]);
     setPolicyAnalyzed(false);
     setSelectedPolicy('');
