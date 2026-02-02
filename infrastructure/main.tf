@@ -1188,51 +1188,53 @@ You are an IT Compliance Auditor for Keppel validating against 'Keppel Technolog
 You have access to:
 - **Policy KB**: Keppel's internal policy requirements
 - **SOC2 KB**: Vendor SOC2 reports (PDF) in inputs/SOCreports/{SystemName}/
-- **Athena**: System logs, VAPT data, and Qualys data - query tables in compliance_db
+- **Athena**: System logs in compliance_db database - query table named after the system (e.g., 'cyberark', 'einvoice')
 
-STRICT RULES:
+CRITICAL VALIDATION RULES:
 
-1. SOC2 EVIDENCE RULE:
-   - Each system has its OWN SOC2 report
-   - If no SOC2 report exists for the exact system name, write: "SOC2 report not present for [SystemName]"
+1. SOC2 EVIDENCE:
+   - Call read_soc_report with the exact system_name to get SOC2 evidence
+   - If no SOC2 report exists, explicitly state: "SOC2 report not present for [SystemName]"
    - NEVER use SOC2 evidence from one system to validate another
 
-2. PATCHING/VULNERABILITY SECTIONS (8.5, 8.6 or any section mentioning patches, vulnerabilities, VAPT):
-   When auditing patching compliance:
-   a) FIRST search Policy KB to extract the EXACT remediation timeframes for each severity level
-   b) Query Athena table 'vapt_{system_name}' for VAPT vulnerability findings
-   c) Query Athena table 'qualys_{system_name}' for Qualys vulnerability data
-   d) Query system logs for patch application evidence
-   e) Apply the timeframes FROM THE POLICY to determine compliance
+2. LOG EVIDENCE:
+   - ALWAYS query Athena to check for logs: SELECT * FROM {system_name} LIMIT 10
+   - If table exists and has data, analyze the log entries for compliance evidence
+   - If table doesn't exist or query fails, state: "No logs available for [SystemName]"
+   - Look for patch installation evidence (KB numbers, security updates, timestamps)
 
-3. GAPS RULE:
-   - If SOC2 report is missing → that IS a gap
-   - If VAPT/Qualys data not available → that IS a gap  
-   - If logs not available → that IS a gap
-   - ALWAYS list gaps in the GAPS IDENTIFIED section
+3. COMPLIANCE DETERMINATION - Use these EXACT statuses:
+   - COMPLIANT: All policy requirements met with evidence from SOC2 AND logs
+   - PARTIALLY_COMPLIANT: Some requirements met, but gaps exist in evidence
+   - NON-COMPLIANT: Clear violations found OR critical evidence missing
+   - CANNOT_ASSESS: Unable to validate due to missing data sources
 
-4. FORMAT RULE - Use EXACTLY these headings:
+4. GAPS RULE:
+   - Missing SOC2 report = GAP
+   - Missing logs/no Athena table = GAP  
+   - Evidence doesn't meet policy timeframes = GAP
+   - ALWAYS list ALL gaps found
+
+5. REQUIRED OUTPUT FORMAT - Use EXACTLY these headings:
 
 POLICY REQUIREMENTS IDENTIFIED:
-[Extract from Policy KB - for patching, include EXACT timeframes for each severity]
+[Extract specific requirements from Policy KB including exact timeframes]
 
 SOC2:
-[Evidence from this system's SOC2, or "SOC2 report not present for [SystemName]"]
-
-VAPT/QUALYS:
-[Athena query results from vapt_ and qualys_ tables, or "No VAPT/Qualys data found for [SystemName]"]
+[Evidence from this system's SOC2 report, or "SOC2 report not present for [SystemName]"]
 
 LOGS:
-[Query results, or "No logs available"]
+[Athena query results showing log evidence, or "No logs available for [SystemName]"]
 
 COMPLIANCE ASSESSMENT:
-[COMPLIANT/PARTIALLY COMPLIANT/NON-COMPLIANT/CANNOT ASSESS]
+[State one of: COMPLIANT / PARTIALLY_COMPLIANT / NON-COMPLIANT / CANNOT_ASSESS]
+[Explain reasoning based on evidence found]
 
 GAPS IDENTIFIED:
-[List ALL gaps with policy reference]
+[List ALL gaps - be specific about what's missing]
 
 RECOMMENDATION:
-[Actions to address gaps]
+[Specific actions to address each gap]
 EOT
   
   tags = var.tags
@@ -1674,8 +1676,116 @@ data "archive_file" "agent_invoker_zip" {
 import boto3
 import json
 import uuid
+import re
 
 client = boto3.client('bedrock-agent-runtime')
+
+def parse_compliance_status(text):
+    """Extract compliance status from agent response."""
+    text_upper = text.upper()
+    
+    # Check for explicit status markers
+    if 'NON-COMPLIANT' in text_upper or 'NON_COMPLIANT' in text_upper:
+        return 'NON-COMPLIANT'
+    if 'PARTIALLY COMPLIANT' in text_upper or 'PARTIAL COMPLIANCE' in text_upper:
+        return 'PARTIALLY_COMPLIANT'
+    if 'CANNOT ASSESS' in text_upper or 'UNABLE TO ASSESS' in text_upper:
+        return 'CANNOT_ASSESS'
+    if 'COMPLIANT' in text_upper:
+        return 'COMPLIANT'
+    return 'REQUIRES_REVIEW'
+
+def parse_risk_level(text):
+    """Extract risk level from agent response."""
+    text_upper = text.upper()
+    if 'CRITICAL' in text_upper or 'HIGH RISK' in text_upper:
+        return 'HIGH'
+    if 'MEDIUM RISK' in text_upper:
+        return 'MEDIUM'
+    if 'LOW RISK' in text_upper:
+        return 'LOW'
+    # Default based on compliance
+    if 'NON-COMPLIANT' in text_upper:
+        return 'HIGH'
+    if 'PARTIALLY' in text_upper:
+        return 'MEDIUM'
+    return 'MEDIUM'
+
+def detect_soc_evidence(text, system_name):
+    """Detect if SOC2 evidence was found for this system."""
+    text_lower = text.lower()
+    system_lower = system_name.lower() if system_name else ''
+    
+    # Negative indicators - SOC not found
+    negative_patterns = [
+        f'soc2 report not present for {system_lower}',
+        f'no soc2 report.*{system_lower}',
+        f'no {system_lower}.*soc2',
+        'soc2 report not present',
+        'no soc2 evidence',
+        'soc2 documentation gap',
+        'no dedicated.*soc2',
+        'soc2 report is missing'
+    ]
+    for pattern in negative_patterns:
+        if re.search(pattern, text_lower):
+            return False
+    
+    # Positive indicators - SOC found
+    positive_patterns = [
+        f'{system_lower}.*soc2',
+        f'soc2.*{system_lower}',
+        'soc2 report demonstrates',
+        'soc2 evidence',
+        'soc2 controls',
+        'according to.*soc2',
+        'soc2 report shows'
+    ]
+    for pattern in positive_patterns:
+        if re.search(pattern, text_lower):
+            return True
+    
+    return False
+
+def detect_log_evidence(text, system_name):
+    """Detect if log evidence was found for this system."""
+    text_lower = text.lower()
+    
+    # Negative indicators - logs not found
+    negative_patterns = [
+        'no log',
+        'no operational log',
+        'logs not available',
+        'no evidence.*log',
+        'log.*not available',
+        'missing log',
+        'no.*log data',
+        'database tables.*do not exist',
+        'could not access.*log'
+    ]
+    for pattern in negative_patterns:
+        if re.search(pattern, text_lower):
+            return False
+    
+    # Positive indicators - logs found
+    positive_patterns = [
+        'log analysis',
+        'log entries',
+        'logs show',
+        'logs reveal',
+        'log evidence',
+        'analysis of.*logs',
+        'queried.*logs',
+        'log data',
+        'patching activities',
+        'security update',
+        'kb[0-9]+'  # Windows KB patches
+    ]
+    for pattern in positive_patterns:
+        if re.search(pattern, text_lower):
+            return True
+    
+    return False
 
 def lambda_handler(event, context):
     agent_id = event['agent_id']
@@ -1714,8 +1824,21 @@ def lambda_handler(event, context):
     for event in response.get('completion'):
         if 'chunk' in event:
             completion += event['chunk']['bytes'].decode('utf-8')
+    
+    # Extract structured data from response
+    compliance_status = parse_compliance_status(completion)
+    risk_level = parse_risk_level(completion)
+    soc_evidence = detect_soc_evidence(completion, system_name)
+    log_evidence = detect_log_evidence(completion, system_name)
             
-    return {'completion': completion, 'user_prompt': user_prompt}
+    return {
+        'completion': completion,
+        'user_prompt': user_prompt,
+        'compliance_status': compliance_status,
+        'risk_level': risk_level,
+        'soc_evidence': soc_evidence,
+        'log_evidence': log_evidence
+    }
 EOF
     filename = "index.py"
   }
@@ -1827,11 +1950,11 @@ resource "aws_sfn_state_machine" "compliance_workflow" {
               "system_name.$": "$.system_name",
               "user_query.$": "$.agent_response.Payload.user_prompt",
               "analysis.$": "$.agent_response.Payload.completion",
-              "compliance_status": "REQUIRES_REVIEW",
-              "risk_level": "MEDIUM",
-              "recommendation": "Review agent analysis for detailed recommendations",
-              "soc_report": true,
-              "patch_log": false
+              "compliance_status.$": "$.agent_response.Payload.compliance_status",
+              "risk_level.$": "$.agent_response.Payload.risk_level",
+              "soc_report.$": "$.agent_response.Payload.soc_evidence",
+              "patch_log.$": "$.agent_response.Payload.log_evidence",
+              "recommendation": "Review agent analysis for detailed recommendations"
             },
             "End": true
           }
@@ -1909,11 +2032,11 @@ resource "aws_sfn_state_machine" "compliance_workflow" {
               "system_name.$": "$.system_name",
               "user_query.$": "$.agent_response.Payload.user_prompt",
               "analysis.$": "$.agent_response.Payload.completion",
-              "compliance_status": "REQUIRES_REVIEW",
-              "risk_level": "MEDIUM",
-              "recommendation": "Review agent analysis for detailed recommendations",
-              "soc_report": true,
-              "patch_log": false
+              "compliance_status.$": "$.agent_response.Payload.compliance_status",
+              "risk_level.$": "$.agent_response.Payload.risk_level",
+              "soc_report.$": "$.agent_response.Payload.soc_evidence",
+              "patch_log.$": "$.agent_response.Payload.log_evidence",
+              "recommendation": "Review agent analysis for detailed recommendations"
             },
             "End": true
           }
