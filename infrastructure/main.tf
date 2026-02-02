@@ -1906,6 +1906,7 @@ resource "aws_sfn_state_machine" "compliance_workflow" {
             "Type": "Pass",
             "Parameters": {
               "section.$": "$.section",
+              "system_name.$": "$.system_name",
               "user_query.$": "$.agent_response.Payload.user_prompt",
               "analysis.$": "$.agent_response.Payload.completion",
               "compliance_status": "REQUIRES_REVIEW",
