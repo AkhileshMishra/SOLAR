@@ -385,6 +385,7 @@ const Dashboard = ({ user, signOut }) => {
                       <TableCell><strong>Key Control</strong></TableCell>
                       <TableCell><strong>System Name</strong></TableCell>
                       <TableCell><strong>SOC Report</strong></TableCell>
+                      <TableCell><strong>VAPT/Qualys</strong></TableCell>
                       <TableCell><strong>Patch Log</strong></TableCell>
                       <TableCell><strong>Status</strong></TableCell>
                     </TableRow>
@@ -398,8 +399,9 @@ const Dashboard = ({ user, signOut }) => {
                         <TableRow key={idx}>
                           <TableCell>{f.section || '-'}</TableCell>
                           <TableCell>{f.system_name || selectedSystem || '-'}</TableCell>
-                          <TableCell>{f.soc_report ? 'Y' : 'N'}</TableCell>
-                          <TableCell>{f.patch_log ? 'Y' : 'N'}</TableCell>
+                          <TableCell sx={{ color: f.soc_report ? 'green' : 'red' }}>{f.soc_report ? 'Y' : 'N'}</TableCell>
+                          <TableCell sx={{ color: f.vapt_evidence ? 'green' : 'orange' }}>{f.vapt_evidence ? 'Y' : 'N'}</TableCell>
+                          <TableCell sx={{ color: f.patch_log ? 'green' : 'red' }}>{f.patch_log ? 'Y' : 'N'}</TableCell>
                           <TableCell>
                             {isNonCompliant ? (
                               <Link

@@ -83,40 +83,39 @@ def parse_analysis(analysis_text):
     
     # Multiple pattern variations to handle agent response formats
     policy_patterns = [
-        r'POLICY REQUIREMENTS IDENTIFIED:\s*(.+?)(?=SOC2:|VAPT|LOGS:|COMPLIANCE|GAPS|RECOMMENDATION|EVIDENCE|$)',
-        r'\*\*POLICY REQUIREMENTS[^*]*\*\*[:\s]*(.+?)(?=\*\*SOC2|\*\*VAPT|\*\*EVIDENCE|\*\*COMPLIANCE|\*\*GAPS|\*\*RECOMMENDATION|\*\*NOTE|$)',
-        r'POLICY REQUIREMENTS[^:]*:\s*(.+?)(?=SOC2|VAPT|EVIDENCE|COMPLIANCE|GAPS|RECOMMENDATION|NOTE|$)'
-    ]
-    
-    soc2_patterns = [
-        r'SOC2:\s*(.+?)(?=VAPT|LOGS:|COMPLIANCE|GAPS|RECOMMENDATION|$)',
-        r'\*\*[^*]*SOC2[^*]*\*\*[:\s]*(.+?)(?=\*\*VAPT|\*\*LOG|\*\*COMPLIANCE|\*\*GAPS|\*\*RECOMMENDATION|\*\*NOTE|$)',
-        r'1\.\s*SOC2[^:]*:\s*(.+?)(?=2\.|VAPT|LOGS|COMPLIANCE|GAPS|RECOMMENDATION|$)',
-        r'SOC2[^:]*(?:EVIDENCE|CONTROLS|Report)[^:]*[:\s]*(.+?)(?=VAPT|LOG|COMPLIANCE|GAPS|RECOMMENDATION|NOTE|2\.|$)'
+        r'POLICY REQUIREMENTS IDENTIFIED:\s*(.+?)(?=SOC2|VAPT|LOGS:|PATCH|COMPLIANCE|GAPS|RECOMMENDATION|EVIDENCE|$)',
+        r'\*\*POLICY REQUIREMENTS[^*]*\*\*[:\s]*(.+?)(?=\*\*SOC2|\*\*VAPT|\*\*PATCH|\*\*EVIDENCE|\*\*COMPLIANCE|\*\*GAPS|\*\*RECOMMENDATION|\*\*NOTE|$)',
+        r'POLICY REQUIREMENTS[^:]*:\s*(.+?)(?=SOC2|VAPT|PATCH|EVIDENCE|COMPLIANCE|GAPS|RECOMMENDATION|NOTE|$)'
     ]
     
     vapt_patterns = [
-        r'VAPT/QUALYS:\s*(.+?)(?=LOGS:|COMPLIANCE|GAPS|RECOMMENDATION|$)',
-        r'VAPT[^:]*:\s*(.+?)(?=LOGS:|COMPLIANCE|GAPS|RECOMMENDATION|$)',
-        r'\*\*VAPT[^*]*\*\*[:\s]*(.+?)(?=\*\*LOG|\*\*COMPLIANCE|\*\*GAPS|\*\*RECOMMENDATION|$)',
-        r'QUALYS[^:]*:\s*(.+?)(?=LOGS:|COMPLIANCE|GAPS|RECOMMENDATION|$)'
+        r'VAPT/QUALYS FINDINGS:\s*(.+?)(?=SOC2|LOGS:|PATCH|COMPLIANCE|GAPS|RECOMMENDATION|$)',
+        r'VAPT/QUALYS:\s*(.+?)(?=SOC2|LOGS:|PATCH|COMPLIANCE|GAPS|RECOMMENDATION|$)',
+        r'VAPT[^:]*FINDINGS[^:]*:\s*(.+?)(?=SOC2|LOGS:|PATCH|COMPLIANCE|GAPS|RECOMMENDATION|$)',
+        r'\*\*VAPT[^*]*\*\*[:\s]*(.+?)(?=\*\*SOC2|\*\*LOG|\*\*PATCH|\*\*COMPLIANCE|\*\*GAPS|\*\*RECOMMENDATION|$)',
+        r'QUALYS[^:]*:\s*(.+?)(?=SOC2|LOGS:|PATCH|COMPLIANCE|GAPS|RECOMMENDATION|$)'
+    ]
+    
+    soc2_patterns = [
+        r'SOC2 EVIDENCE:\s*(.+?)(?=VAPT|LOGS:|PATCH|COMPLIANCE|GAPS|RECOMMENDATION|$)',
+        r'SOC2:\s*(.+?)(?=VAPT|LOGS:|PATCH|COMPLIANCE|GAPS|RECOMMENDATION|$)',
+        r'\*\*[^*]*SOC2[^*]*\*\*[:\s]*(.+?)(?=\*\*VAPT|\*\*LOG|\*\*PATCH|\*\*COMPLIANCE|\*\*GAPS|\*\*RECOMMENDATION|\*\*NOTE|$)',
+        r'SOC2[^:]*(?:EVIDENCE|CONTROLS|Report)[^:]*[:\s]*(.+?)(?=VAPT|LOG|PATCH|COMPLIANCE|GAPS|RECOMMENDATION|NOTE|$)'
     ]
     
     logs_patterns = [
+        r'PATCH LOG EVIDENCE:\s*(.+?)(?=COMPLIANCE|GAPS|RECOMMENDATION|$)',
         r'LOGS:\s*(.+?)(?=COMPLIANCE|GAPS|RECOMMENDATION|\*\*4\.|$)',
-        r'\*\*3\.\s*LOG[^*]*\*\*[:\s]*(.+?)(?=\*\*4\.|\*\*COMPLIANCE|\*\*GAPS|\*\*RECOMMENDATION|$)',
-        r'\*\*LOG[^*]*(?:ANALYSIS|FINDINGS|EVIDENCE)[^*]*\*\*[:\s]*(.+?)(?=\*\*4\.|\*\*COMPLIANCE|\*\*GAPS|\*\*RECOMMENDATION|$)',
-        r'3\.\s*LOG[^:]*:\s*(.+?)(?=4\.|COMPLIANCE|GAPS|RECOMMENDATION|$)',
-        r'2\.\s*(?:System\s*)?Logs[^:]*:\s*(.+?)(?=COMPLIANCE|GAPS|RECOMMENDATION|$)',
-        r'\*\*NOTE ON LOG[^*]*\*\*[:\s]*(.+?)(?=\*\*COMPLIANCE|\*\*GAPS|\*\*RECOMMENDATION|$)'
+        r'LOG EVIDENCE:\s*(.+?)(?=COMPLIANCE|GAPS|RECOMMENDATION|$)',
+        r'\*\*PATCH LOG[^*]*\*\*[:\s]*(.+?)(?=\*\*COMPLIANCE|\*\*GAPS|\*\*RECOMMENDATION|$)',
+        r'\*\*LOG[^*]*(?:ANALYSIS|FINDINGS|EVIDENCE)[^*]*\*\*[:\s]*(.+?)(?=\*\*COMPLIANCE|\*\*GAPS|\*\*RECOMMENDATION|$)',
+        r'PATCH.*EVIDENCE[^:]*:\s*(.+?)(?=COMPLIANCE|GAPS|RECOMMENDATION|$)'
     ]
     
     assessment_patterns = [
-        r'COMPLIANCE ASSESSMENT:\s*(.+?)(?=GAPS IDENTIFIED|RECOMMENDATION|$)',
-        r'\*\*4\.\s*COMPLIANCE[^*]*\*\*[:\s]*(.+?)(?=\*\*5\.|\*\*GAPS|\*\*RECOMMENDATION|$)',
+        r'COMPLIANCE ASSESSMENT:\s*(.+?)(?=GAPS IDENTIFIED|GAPS:|RECOMMENDATION|$)',
         r'\*\*COMPLIANCE[^*]*\*\*[:\s]*(.+?)(?=\*\*GAPS|\*\*RECOMMENDATION|\*\*NOTE|$)',
-        r'COMPLIANCE ASSESSMENT[^:]*:\s*(.+?)(?=GAPS|RECOMMENDATION|NOTE|$)',
-        r'4\.\s*COMPLIANCE[^:]*:\s*(.+?)(?=5\.|GAPS|RECOMMENDATION|$)'
+        r'COMPLIANCE ASSESSMENT[^:]*:\s*(.+?)(?=GAPS|RECOMMENDATION|NOTE|$)'
     ]
     
     gaps_patterns = [

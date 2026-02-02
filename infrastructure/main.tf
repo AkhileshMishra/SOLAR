@@ -1185,53 +1185,86 @@ resource "aws_bedrockagent_agent" "compliance_auditor" {
   instruction = <<-EOT
 You are an IT Compliance Auditor for Keppel validating against 'Keppel Technology and Cybersecurity Standards (TECH-S01-01)'.
 
-You have access to:
-- **Policy KB**: Keppel's internal policy requirements
-- **SOC2 KB**: Vendor SOC2 reports (PDF) in inputs/SOCreports/{SystemName}/
-- **Athena**: System logs in compliance_db database - query table named after the system (e.g., 'cyberark', 'einvoice')
+## AVAILABLE DATA SOURCES
 
-CRITICAL VALIDATION RULES:
+1. **Policy KB**: Keppel's internal policy requirements (search for timeframes, requirements)
+2. **SOC2 KB**: Vendor SOC2 reports - call read_soc_report with system_name
+3. **Athena Tables** in compliance_db:
+   - System logs: table name = system name lowercase (e.g., 'cyberark', 'einvoice')
+   - VAPT data: table name = 'vapt_{system}' (e.g., 'vapt_cyberark')
+   - Qualys data: table name = 'qualys_{system}' or 'qualys' for combined
 
-1. SOC2 EVIDENCE:
-   - Call read_soc_report with the exact system_name to get SOC2 evidence
-   - If no SOC2 report exists, explicitly state: "SOC2 report not present for [SystemName]"
-   - NEVER use SOC2 evidence from one system to validate another
+## VALIDATION WORKFLOW
 
-2. LOG EVIDENCE:
-   - ALWAYS query Athena to check for logs: SELECT * FROM {system_name} LIMIT 10
-   - If table exists and has data, analyze the log entries for compliance evidence
-   - If table doesn't exist or query fails, state: "No logs available for [SystemName]"
-   - Look for patch installation evidence (KB numbers, security updates, timestamps)
+### For PATCHING/VULNERABILITY Sections (8.5, 8.6, or sections mentioning patches/vulnerabilities):
 
-3. COMPLIANCE DETERMINATION - Use these EXACT statuses:
-   - COMPLIANT: All policy requirements met with evidence from SOC2 AND logs
-   - PARTIALLY_COMPLIANT: Some requirements met, but gaps exist in evidence
-   - NON-COMPLIANT: Clear violations found OR critical evidence missing
-   - CANNOT_ASSESS: Unable to validate due to missing data sources
+**Step 1: Get Policy Requirements**
+- Search Policy KB for EXACT remediation timeframes
+- Example: "Critical: 1 month, High: 3 months, Medium: 6 months"
 
-4. GAPS RULE:
-   - Missing SOC2 report = GAP
-   - Missing logs/no Athena table = GAP  
-   - Evidence doesn't meet policy timeframes = GAP
-   - ALWAYS list ALL gaps found
+**Step 2: Check for Vulnerabilities (VAPT/Qualys)**
+- Query: SELECT * FROM vapt_{system} LIMIT 20
+- Query: SELECT * FROM qualys WHERE LOWER(hostname) LIKE '%{system}%' LIMIT 20
+- If tables don't exist, state: "No VAPT/Qualys data available for [SystemName]"
+- Extract: CVE IDs, severity, affected hosts, dates found
 
-5. REQUIRED OUTPUT FORMAT - Use EXACTLY these headings:
+**Step 3: Check for Patch Evidence**
+- Query system logs: SELECT * FROM {system} WHERE LOWER(col0) LIKE '%patch%' OR LOWER(col0) LIKE '%kb%' OR LOWER(col0) LIKE '%update%' LIMIT 50
+- Look for: KB numbers (e.g., KB5065687), patch dates, security updates
+- If no logs, state: "No patch logs available for [SystemName]"
+
+**Step 4: Check SOC2 for Vendor Patch Process**
+- Call read_soc_report with system_name
+- Look for: vulnerability management controls, patch management processes
+- If no SOC2, state: "SOC2 report not present for [SystemName]"
+
+**Step 5: Cross-Validate and Determine Compliance**
+- For each vulnerability found in VAPT/Qualys:
+  - Was a corresponding patch applied? (match CVE/KB if possible)
+  - Was it applied within policy timeframe?
+- If VAPT shows Critical vuln on Jan 1, policy says 1 month, patch must be by Feb 1
+
+### For OTHER Sections (Access Control, etc.):
+- Search Policy KB for requirements
+- Query relevant logs for evidence
+- Check SOC2 for vendor controls
+- Assess compliance based on evidence
+
+## COMPLIANCE STATUS RULES
+
+- **COMPLIANT**: Evidence shows ALL requirements met within timeframes
+- **PARTIALLY_COMPLIANT**: Some evidence exists but gaps remain
+- **NON-COMPLIANT**: 
+  - Vulnerabilities found with NO patch evidence, OR
+  - Patches applied OUTSIDE policy timeframe, OR
+  - Critical evidence sources missing (no logs AND no SOC2)
+- **CANNOT_ASSESS**: No data sources available to validate
+
+## REQUIRED OUTPUT FORMAT
 
 POLICY REQUIREMENTS IDENTIFIED:
-[Extract specific requirements from Policy KB including exact timeframes]
+[Extract specific requirements with exact timeframes from Policy KB]
 
-SOC2:
-[Evidence from this system's SOC2 report, or "SOC2 report not present for [SystemName]"]
+VAPT/QUALYS FINDINGS:
+[List vulnerabilities found with severity and dates, or "No VAPT/Qualys data for [SystemName]"]
 
-LOGS:
-[Athena query results showing log evidence, or "No logs available for [SystemName]"]
+SOC2 EVIDENCE:
+[Vendor controls from SOC2, or "SOC2 report not present for [SystemName]"]
+
+PATCH LOG EVIDENCE:
+[Patches found in logs with dates, or "No patch logs available for [SystemName]"]
 
 COMPLIANCE ASSESSMENT:
-[State one of: COMPLIANT / PARTIALLY_COMPLIANT / NON-COMPLIANT / CANNOT_ASSESS]
-[Explain reasoning based on evidence found]
+[COMPLIANT / PARTIALLY_COMPLIANT / NON-COMPLIANT / CANNOT_ASSESS]
+[Detailed reasoning - for each vulnerability, state if patched and within timeframe]
 
 GAPS IDENTIFIED:
-[List ALL gaps - be specific about what's missing]
+[List ALL gaps:
+- Missing VAPT/Qualys data
+- Missing patch logs
+- Missing SOC2 report
+- Vulnerabilities without patch evidence
+- Patches outside policy timeframe]
 
 RECOMMENDATION:
 [Specific actions to address each gap]
@@ -1748,7 +1781,7 @@ def detect_soc_evidence(text, system_name):
     return False
 
 def detect_log_evidence(text, system_name):
-    """Detect if log evidence was found for this system."""
+    """Detect if log/patch evidence was found for this system."""
     text_lower = text.lower()
     
     # Negative indicators - logs not found
@@ -1761,13 +1794,15 @@ def detect_log_evidence(text, system_name):
         'missing log',
         'no.*log data',
         'database tables.*do not exist',
-        'could not access.*log'
+        'could not access.*log',
+        'no patch log',
+        'patch logs.*not available'
     ]
     for pattern in negative_patterns:
         if re.search(pattern, text_lower):
             return False
     
-    # Positive indicators - logs found
+    # Positive indicators - logs/patches found
     positive_patterns = [
         'log analysis',
         'log entries',
@@ -1779,7 +1814,46 @@ def detect_log_evidence(text, system_name):
         'log data',
         'patching activities',
         'security update',
-        'kb[0-9]+'  # Windows KB patches
+        'patch.*installed',
+        'kb[0-9]+',  # Windows KB patches
+        'patch log evidence',
+        'patches found'
+    ]
+    for pattern in positive_patterns:
+        if re.search(pattern, text_lower):
+            return True
+    
+    return False
+
+def detect_vapt_evidence(text, system_name):
+    """Detect if VAPT/Qualys vulnerability data was found."""
+    text_lower = text.lower()
+    
+    # Negative indicators
+    negative_patterns = [
+        'no vapt',
+        'no qualys',
+        'vapt.*not available',
+        'qualys.*not available',
+        'no vulnerability data',
+        'vapt/qualys data.*not',
+        'no vapt/qualys'
+    ]
+    for pattern in negative_patterns:
+        if re.search(pattern, text_lower):
+            return False
+    
+    # Positive indicators
+    positive_patterns = [
+        'vapt.*found',
+        'qualys.*found',
+        'vulnerabilities found',
+        'cve-[0-9]',
+        'vulnerability scan',
+        'vapt report',
+        'qualys report',
+        'critical vulnerabilit',
+        'high vulnerabilit'
     ]
     for pattern in positive_patterns:
         if re.search(pattern, text_lower):
@@ -1805,12 +1879,30 @@ def lambda_handler(event, context):
     # Convert system name to table name (lowercase, no spaces)
     table_name = system_name.lower().replace(' ', '_').replace('-', '_') if system_name else ''
     
-    # Base prompt always used
-    input_text = f"Analyze compliance for Policy Section: {section}. System to validate: {system_name}. 1) Search the Policy Knowledge Base for requirements. 2) Search the SOC2 Knowledge Base for {system_name} vendor controls and evidence. 3) Query logs from table '{table_name}' in database 'compliance_db' using Athena. 4) Compare requirements against evidence and cite specific sources."
+    # Detect if this is a patching-related section
+    section_lower = section.lower()
+    is_patching_section = any(kw in section_lower for kw in ['patch', 'vulnerab', '8.5', '8.6', 'vapt', 'technical'])
+    
+    # Build comprehensive prompt
+    if is_patching_section:
+        input_text = f"""Analyze compliance for Policy Section: {section}. System to validate: {system_name}.
+
+REQUIRED STEPS FOR PATCHING COMPLIANCE:
+1) Search Policy KB for EXACT patch remediation timeframes (Critical: X days, High: Y days, etc.)
+2) Query Athena table 'vapt_{table_name}' for VAPT vulnerabilities - if table doesn't exist, state "No VAPT data"
+3) Query Athena table 'qualys' or 'qualys_{table_name}' for Qualys data - if not found, state "No Qualys data"
+4) Query Athena table '{table_name}' for patch installation logs - look for KB numbers and dates
+5) Call read_soc_report for {system_name} to get vendor patch management controls
+6) CROSS-VALIDATE: For each vulnerability found, check if corresponding patch exists in logs
+7) Determine if patches were applied within policy timeframes
+
+Be explicit about what data sources exist vs don't exist."""
+    else:
+        input_text = f"Analyze compliance for Policy Section: {section}. System to validate: {system_name}. 1) Search the Policy Knowledge Base for requirements. 2) Call read_soc_report for {system_name} vendor controls. 3) Query logs from table '{table_name}' in compliance_db. 4) Compare requirements against evidence."
     
     # Append user's specific focus if provided
     if user_prompt:
-        input_text += f" ADDITIONAL USER FOCUS: {user_prompt}. Prioritize this specific aspect in your analysis."
+        input_text += f" ADDITIONAL USER FOCUS: {user_prompt}."
 
     response = client.invoke_agent(
         agentId=agent_id,
@@ -1821,15 +1913,16 @@ def lambda_handler(event, context):
     
     # Parse the event stream
     completion = ""
-    for event in response.get('completion'):
-        if 'chunk' in event:
-            completion += event['chunk']['bytes'].decode('utf-8')
+    for evt in response.get('completion'):
+        if 'chunk' in evt:
+            completion += evt['chunk']['bytes'].decode('utf-8')
     
     # Extract structured data from response
     compliance_status = parse_compliance_status(completion)
     risk_level = parse_risk_level(completion)
     soc_evidence = detect_soc_evidence(completion, system_name)
     log_evidence = detect_log_evidence(completion, system_name)
+    vapt_evidence = detect_vapt_evidence(completion, system_name)
             
     return {
         'completion': completion,
@@ -1837,7 +1930,8 @@ def lambda_handler(event, context):
         'compliance_status': compliance_status,
         'risk_level': risk_level,
         'soc_evidence': soc_evidence,
-        'log_evidence': log_evidence
+        'log_evidence': log_evidence,
+        'vapt_evidence': vapt_evidence
     }
 EOF
     filename = "index.py"
@@ -1953,6 +2047,7 @@ resource "aws_sfn_state_machine" "compliance_workflow" {
               "compliance_status.$": "$.agent_response.Payload.compliance_status",
               "risk_level.$": "$.agent_response.Payload.risk_level",
               "soc_report.$": "$.agent_response.Payload.soc_evidence",
+              "vapt_evidence.$": "$.agent_response.Payload.vapt_evidence",
               "patch_log.$": "$.agent_response.Payload.log_evidence",
               "recommendation": "Review agent analysis for detailed recommendations"
             },
@@ -2035,6 +2130,7 @@ resource "aws_sfn_state_machine" "compliance_workflow" {
               "compliance_status.$": "$.agent_response.Payload.compliance_status",
               "risk_level.$": "$.agent_response.Payload.risk_level",
               "soc_report.$": "$.agent_response.Payload.soc_evidence",
+              "vapt_evidence.$": "$.agent_response.Payload.vapt_evidence",
               "patch_log.$": "$.agent_response.Payload.log_evidence",
               "recommendation": "Review agent analysis for detailed recommendations"
             },
