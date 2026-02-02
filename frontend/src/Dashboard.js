@@ -11,7 +11,8 @@ import {
   Container, Typography, Box, Button, Select, MenuItem, 
   TextField, Paper, CircularProgress, Alert, AppBar, Toolbar,
   IconButton, Card, CardContent, Modal, LinearProgress, Stepper, Step, StepLabel,
-  Tabs, Tab, Table, TableBody, TableCell, TableContainer, TableHead, TableRow
+  Tabs, Tab, Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
+  Dialog, DialogTitle, DialogContent, DialogActions, Link
 } from '@mui/material';
 import DownloadIcon from '@mui/icons-material/Download';
 import AddIcon from '@mui/icons-material/Add';
@@ -66,6 +67,10 @@ const Dashboard = ({ user, signOut }) => {
   // History tab state
   const [auditHistory, setAuditHistory] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+
+  // Findings table state
+  const [findings, setFindings] = useState([]);
+  const [detailDialog, setDetailDialog] = useState({ open: false, finding: null });
 
   const getUserId = () => {
     return user?.username || user?.signInDetails?.loginId || 'unknown';
@@ -257,7 +262,9 @@ const Dashboard = ({ user, signOut }) => {
           const output = JSON.parse(statusData.output);
           const docxKey = output.report_location.replace(`s3://${BUCKET_NAME}/`, '');
           const htmlKey = output.html_key; // New: HTML key from Lambda
+          const reportFindings = output.findings || [];
           
+          setFindings(reportFindings);
           setReportUrl(getPresignedUrl(docxKey));
           setStatus('Report Generated Successfully!');
           setLoading(false);
@@ -388,34 +395,58 @@ const Dashboard = ({ user, signOut }) => {
               </Button>
             </Box>
 
-            <Paper 
-              variant="outlined" 
-              sx={{ 
-                p: 0, 
-                height: '65vh', 
-                overflow: 'hidden',
-                backgroundColor: '#fff',
-                borderRadius: 2,
-                boxShadow: '0 2px 8px rgba(0,0,0,0.1)'
-              }}
-            >
-              {reportContent ? (
-                <iframe
-                  srcDoc={reportContent}
-                  title="Compliance Report"
-                  style={{
-                    width: '100%',
-                    height: '100%',
-                    border: 'none',
-                    backgroundColor: '#f5f5f5'
-                  }}
-                />
-              ) : (
-                <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
-                  <CircularProgress />
-                </Box>
-              )}
-            </Paper>
+            {/* Tabular Results Summary */}
+            {findings.length > 0 && (
+              <TableContainer component={Paper} variant="outlined" sx={{ mb: 3 }}>
+                <Table size="small">
+                  <TableHead>
+                    <TableRow sx={{ backgroundColor: '#f5f5f5' }}>
+                      <TableCell><strong>Key Control</strong></TableCell>
+                      <TableCell><strong>System Name</strong></TableCell>
+                      <TableCell><strong>SOC Report</strong></TableCell>
+                      <TableCell><strong>Patch Log</strong></TableCell>
+                      <TableCell><strong>Status</strong></TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {findings.map((f, idx) => {
+                      const status = f.compliance_status || 'UNKNOWN';
+                      const isNonCompliant = status === 'NON-COMPLIANT';
+                      const isCompliant = status === 'COMPLIANT';
+                      return (
+                        <TableRow key={idx}>
+                          <TableCell>{f.section || '-'}</TableCell>
+                          <TableCell>{selectedSystem || '-'}</TableCell>
+                          <TableCell>{f.soc_report ? 'Y' : 'N'}</TableCell>
+                          <TableCell>{f.patch_log ? 'Y' : 'N'}</TableCell>
+                          <TableCell>
+                            {isNonCompliant ? (
+                              <Link
+                                component="button"
+                                sx={{ color: 'red', fontWeight: 'bold', textDecoration: 'underline', cursor: 'pointer' }}
+                                onClick={() => setDetailDialog({ open: true, finding: f })}
+                              >
+                                Non-Compliant
+                              </Link>
+                            ) : isCompliant ? (
+                              <Typography sx={{ color: 'green' }}>Compliant</Typography>
+                            ) : (
+                              <Link
+                                component="button"
+                                sx={{ color: 'orange', textDecoration: 'underline', cursor: 'pointer' }}
+                                onClick={() => setDetailDialog({ open: true, finding: f })}
+                              >
+                                {status.replace('_', ' ')}
+                              </Link>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            )}
 
             <Box sx={{ display: 'flex', gap: 2, mt: 3 }}>
               <Button variant="outlined" startIcon={<ArrowBackIcon />} onClick={handleGoBack}>
@@ -427,6 +458,32 @@ const Dashboard = ({ user, signOut }) => {
             </Box>
           </Paper>
         )}
+
+        {/* Detail Dialog for Non-Compliant Items */}
+        <Dialog open={detailDialog.open} onClose={() => setDetailDialog({ open: false, finding: null })} maxWidth="md" fullWidth>
+          <DialogTitle sx={{ color: detailDialog.finding?.compliance_status === 'NON-COMPLIANT' ? 'red' : 'orange' }}>
+            {detailDialog.finding?.compliance_status === 'NON-COMPLIANT' ? 'Non-Compliance Details' : 'Finding Details'}
+          </DialogTitle>
+          <DialogContent>
+            {detailDialog.finding && (
+              <>
+                <Typography variant="subtitle1"><strong>Section:</strong> {detailDialog.finding.section}</Typography>
+                <Typography variant="subtitle1" sx={{ mt: 1 }}><strong>Risk Level:</strong> {detailDialog.finding.risk_level}</Typography>
+                <Typography variant="subtitle1" sx={{ mt: 1 }}><strong>Analysis:</strong></Typography>
+                <Typography variant="body2" sx={{ mt: 0.5, whiteSpace: 'pre-wrap' }}>{detailDialog.finding.analysis}</Typography>
+                {detailDialog.finding.recommendation && (
+                  <>
+                    <Typography variant="subtitle1" sx={{ mt: 2 }}><strong>Recommendation:</strong></Typography>
+                    <Typography variant="body2">{detailDialog.finding.recommendation}</Typography>
+                  </>
+                )}
+              </>
+            )}
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => setDetailDialog({ open: false, finding: null })}>Close</Button>
+          </DialogActions>
+        </Dialog>
 
         {/* TAB 0: New Audit (hidden when showing report) */}
         {activeTab === 0 && !showReportView && (

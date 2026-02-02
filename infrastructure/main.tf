@@ -1827,7 +1827,11 @@ resource "aws_sfn_state_machine" "compliance_workflow" {
               "system_name.$": "$.system_name",
               "user_query.$": "$.agent_response.Payload.user_prompt",
               "analysis.$": "$.agent_response.Payload.completion",
-              "compliance_status": "REQUIRES_REVIEW"
+              "compliance_status": "REQUIRES_REVIEW",
+              "risk_level": "MEDIUM",
+              "recommendation": "Review agent analysis for detailed recommendations",
+              "soc_report": true,
+              "patch_log": false
             },
             "End": true
           }
@@ -1904,7 +1908,11 @@ resource "aws_sfn_state_machine" "compliance_workflow" {
               "section.$": "$.section",
               "user_query.$": "$.agent_response.Payload.user_prompt",
               "analysis.$": "$.agent_response.Payload.completion",
-              "compliance_status": "REQUIRES_REVIEW"
+              "compliance_status": "REQUIRES_REVIEW",
+              "risk_level": "MEDIUM",
+              "recommendation": "Review agent analysis for detailed recommendations",
+              "soc_report": true,
+              "patch_log": false
             },
             "End": true
           }
@@ -1932,7 +1940,8 @@ resource "aws_sfn_state_machine" "compliance_workflow" {
         "status": "SUCCESS",
         "policy_file.$": "$.policy_file",
         "report_location.$": "$.report_result.Payload.report_location",
-		"html_key.$": "$.report_result.Payload.html_key"
+		"html_key.$": "$.report_result.Payload.html_key",
+        "findings.$": "$.findings"
       },
       "End": true
     }
