@@ -241,7 +241,8 @@ resource "aws_iam_role_policy" "log_ingestion_agent" {
         ]
         Resource = [
           data.aws_bedrock_inference_profile.current.inference_profile_arn,
-          "arn:aws:bedrock:${data.aws_region.current.name}::foundation-model/${var.bedrock_model_id}"
+          "arn:aws:bedrock:${data.aws_region.current.name}::foundation-model/${var.bedrock_model_id}",
+          "arn:aws:bedrock:*::foundation-model/*"
         ]
       },
       {

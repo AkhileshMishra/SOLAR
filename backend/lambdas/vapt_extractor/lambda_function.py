@@ -10,7 +10,7 @@ logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 s3 = boto3.client('s3')
-bedrock = boto3.client('bedrock-runtime')
+bedrock = boto3.client('bedrock-runtime', region_name=os.environ.get('AWS_REGION', 'ap-southeast-1'))
 glue = boto3.client('glue')
 
 def lambda_handler(event, context):
