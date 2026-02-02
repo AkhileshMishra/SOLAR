@@ -62,7 +62,16 @@ def read_file_to_dataframe(bucket, key):
     if file_ext in ['xlsx', 'xls']:
         return pd.read_excel(io.BytesIO(file_content))
     elif file_ext == 'csv':
-        return pd.read_csv(io.BytesIO(file_content))
+        # Try different parsing options for malformed CSVs
+        try:
+            return pd.read_csv(io.BytesIO(file_content))
+        except Exception:
+            try:
+                # Try with error handling for bad lines
+                return pd.read_csv(io.BytesIO(file_content), on_bad_lines='skip')
+            except Exception:
+                # Last resort: read as single column and let Athena handle it
+                return pd.read_csv(io.BytesIO(file_content), sep='\t', on_bad_lines='skip')
     return None
 
 def save_dataframe_to_s3(df, bucket, key):
