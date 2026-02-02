@@ -1830,11 +1830,36 @@ def detect_vapt_evidence(text, system_name):
     """Detect if VAPT/Qualys vulnerability data was found."""
     text_lower = text.lower()
     
+    # Positive indicators - check these FIRST
+    positive_patterns = [
+        'qualys.*yes',
+        'qualys.*exists',
+        'qualys table exists',
+        'qualys data.*yes',
+        'vapt.*found',
+        'vapt.*yes',
+        'vapt.*exists',
+        'qualys.*found',
+        'vulnerabilities found',
+        'cve-[0-9]',
+        'vulnerability scan',
+        'vapt report',
+        'qualys report',
+        'critical vulnerabilit',
+        'high vulnerabilit',
+        'qualys.*contains.*data',
+        'vulnerability data'
+    ]
+    for pattern in positive_patterns:
+        if re.search(pattern, text_lower):
+            return True
+    
     # Negative indicators
     negative_patterns = [
         'no vapt',
         'no qualys',
         'vapt.*not available',
+        'vapt.*does not exist',
         'qualys.*not available',
         'no vulnerability data',
         'vapt/qualys data.*not',
@@ -1843,22 +1868,6 @@ def detect_vapt_evidence(text, system_name):
     for pattern in negative_patterns:
         if re.search(pattern, text_lower):
             return False
-    
-    # Positive indicators
-    positive_patterns = [
-        'vapt.*found',
-        'qualys.*found',
-        'vulnerabilities found',
-        'cve-[0-9]',
-        'vulnerability scan',
-        'vapt report',
-        'qualys report',
-        'critical vulnerabilit',
-        'high vulnerabilit'
-    ]
-    for pattern in positive_patterns:
-        if re.search(pattern, text_lower):
-            return True
     
     return False
 
