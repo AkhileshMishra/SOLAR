@@ -22,16 +22,19 @@ def lambda_handler(event, context):
     # Extract system name from path: inputs/VAPT/{SystemName}/file.pdf
     path_parts = key.split('/')
     system_name = path_parts[2] if len(path_parts) > 2 else 'unknown'
+    filename = path_parts[-1] if path_parts else 'unknown.pdf'
     
     # Read PDF text
     pdf_text = extract_pdf_text(bucket, key)
     if not pdf_text:
+        save_extraction_status(bucket, system_name, filename, "Failed", "Could not extract PDF text", 0)
         return {"status": "Failed", "error": "Could not extract PDF text"}
     
     # Use LLM to extract structured vulnerability data
     vulnerabilities = extract_vulnerabilities_with_llm(pdf_text, system_name)
     
     if not vulnerabilities:
+        save_extraction_status(bucket, system_name, filename, "NoData", "PDF appears to be a policy document - no vulnerabilities found", 0)
         return {"status": "Failed", "error": "No vulnerabilities extracted"}
     
     # Save as CSV
@@ -41,10 +44,27 @@ def lambda_handler(event, context):
     s3.put_object(Bucket=bucket, Key=output_key, Body=csv_content)
     logger.info(f"Saved {len(vulnerabilities)} vulnerabilities to {output_key}")
     
+    # Save success status
+    save_extraction_status(bucket, system_name, filename, "Success", f"Extracted {len(vulnerabilities)} vulnerabilities", len(vulnerabilities))
+    
     # Trigger Glue crawler
     start_crawler()
     
     return {"status": "Success", "count": len(vulnerabilities)}
+
+def save_extraction_status(bucket, system_name, filename, status, message, count):
+    """Save VAPT extraction status to S3 for reporting."""
+    status_key = f"processed/vapt/{system_name}/_extraction_status.json"
+    status_data = json.dumps({
+        "system": system_name,
+        "filename": filename,
+        "status": status,
+        "message": message,
+        "vulnerability_count": count,
+        "timestamp": str(os.environ.get('AWS_LAMBDA_LOG_STREAM_NAME', 'unknown'))
+    })
+    s3.put_object(Bucket=bucket, Key=status_key, Body=status_data, ContentType='application/json')
+    logger.info(f"Saved extraction status: {status} for {system_name}")
 
 def extract_pdf_text(bucket, key):
     try:

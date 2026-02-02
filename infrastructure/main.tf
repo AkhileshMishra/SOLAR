@@ -1203,23 +1203,29 @@ You are an IT Compliance Auditor for Keppel validating against 'Keppel Technolog
 - Search Policy KB for EXACT remediation timeframes
 - Example: "Critical: 1 month, High: 3 months, Medium: 6 months"
 
-**Step 2: Check for Vulnerabilities (VAPT/Qualys)**
+**Step 2: Check VAPT Extraction Status**
+- First check S3: s3://compliance-reporting-bucket-sg-430118833069/processed/vapt/{system}/_extraction_status.json
+- If status="NoData": Report "VAPT file is a policy document - no vulnerabilities to extract, using Qualys only"
+- If status="Failed": Report "VAPT extraction failed - using Qualys only"
+- If status="Success": Proceed to query VAPT table
+
+**Step 3: Check for Vulnerabilities (VAPT/Qualys)**
 - Query: SELECT * FROM vapt_{system} LIMIT 20
 - Query: SELECT * FROM qualys WHERE LOWER(hostname) LIKE '%%{system}%%' LIMIT 20
 - If tables don't exist, state: "No VAPT/Qualys data available for [SystemName]"
 - Extract: CVE IDs, severity, affected hosts, dates found
 
-**Step 3: Check for Patch Evidence**
+**Step 4: Check for Patch Evidence**
 - Query system logs: SELECT * FROM {system} WHERE LOWER(col0) LIKE '%%patch%%' OR LOWER(col0) LIKE '%%kb%%' OR LOWER(col0) LIKE '%%update%%' LIMIT 50
 - Look for: KB numbers (e.g., KB5065687), patch dates, security updates
 - If no logs, state: "No patch logs available for [SystemName]"
 
-**Step 4: Check SOC2 for Vendor Patch Process**
+**Step 5: Check SOC2 for Vendor Patch Process**
 - Call read_soc_report with system_name
 - Look for: vulnerability management controls, patch management processes
 - If no SOC2, state: "SOC2 report not present for [SystemName]"
 
-**Step 5: Cross-Validate and Determine Compliance**
+**Step 6: Cross-Validate and Determine Compliance**
 - For each vulnerability found in VAPT/Qualys:
   - Was a corresponding patch applied? (match CVE/KB if possible)
   - Was it applied within policy timeframe?

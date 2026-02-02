@@ -442,29 +442,114 @@ const Dashboard = ({ user, signOut }) => {
           </Paper>
         )}
 
-        {/* Detail Dialog for Non-Compliant Items */}
+        {/* Detail Dialog for Compliance Status */}
         <Dialog open={detailDialog.open} onClose={() => setDetailDialog({ open: false, finding: null })} maxWidth="md" fullWidth>
-          <DialogTitle sx={{ color: detailDialog.finding?.compliance_status === 'NON-COMPLIANT' ? 'red' : 'orange' }}>
-            {detailDialog.finding?.compliance_status === 'NON-COMPLIANT' ? 'Non-Compliance Details' : 'Finding Details'}
+          <DialogTitle sx={{ 
+            backgroundColor: detailDialog.finding?.compliance_status === 'NON-COMPLIANT' ? '#ffebee' : 
+                            detailDialog.finding?.compliance_status === 'COMPLIANT' ? '#e8f5e9' : '#fff8e1',
+            color: detailDialog.finding?.compliance_status === 'NON-COMPLIANT' ? '#c62828' : 
+                   detailDialog.finding?.compliance_status === 'COMPLIANT' ? '#2e7d32' : '#f57c00'
+          }}>
+            {detailDialog.finding?.compliance_status === 'NON-COMPLIANT' ? '❌ Non-Compliance Details' : 
+             detailDialog.finding?.compliance_status === 'COMPLIANT' ? '✅ Compliance Details' : '⚠️ Review Required'}
           </DialogTitle>
-          <DialogContent>
+          <DialogContent sx={{ mt: 2 }}>
             {detailDialog.finding && (
               <>
-                <Typography variant="subtitle1"><strong>Section:</strong> {detailDialog.finding.section}</Typography>
-                <Typography variant="subtitle1" sx={{ mt: 1 }}><strong>Risk Level:</strong> {detailDialog.finding.risk_level}</Typography>
-                <Typography variant="subtitle1" sx={{ mt: 1 }}><strong>Analysis:</strong></Typography>
-                <Typography variant="body2" sx={{ mt: 0.5, whiteSpace: 'pre-wrap' }}>{detailDialog.finding.analysis}</Typography>
-                {detailDialog.finding.recommendation && (
-                  <>
-                    <Typography variant="subtitle1" sx={{ mt: 2 }}><strong>Recommendation:</strong></Typography>
-                    <Typography variant="body2">{detailDialog.finding.recommendation}</Typography>
-                  </>
-                )}
+                {/* Summary Table */}
+                <TableContainer component={Paper} variant="outlined" sx={{ mb: 3 }}>
+                  <Table size="small">
+                    <TableBody>
+                      <TableRow>
+                        <TableCell sx={{ fontWeight: 'bold', width: '30%', backgroundColor: '#f5f5f5' }}>Section</TableCell>
+                        <TableCell>{detailDialog.finding.section}</TableCell>
+                      </TableRow>
+                      <TableRow>
+                        <TableCell sx={{ fontWeight: 'bold', backgroundColor: '#f5f5f5' }}>System</TableCell>
+                        <TableCell>{detailDialog.finding.system_name || '-'}</TableCell>
+                      </TableRow>
+                      <TableRow>
+                        <TableCell sx={{ fontWeight: 'bold', backgroundColor: '#f5f5f5' }}>Status</TableCell>
+                        <TableCell sx={{ 
+                          color: detailDialog.finding.compliance_status === 'NON-COMPLIANT' ? 'red' : 
+                                 detailDialog.finding.compliance_status === 'COMPLIANT' ? 'green' : 'orange',
+                          fontWeight: 'bold'
+                        }}>
+                          {detailDialog.finding.compliance_status?.replace('_', ' ')}
+                        </TableCell>
+                      </TableRow>
+                      <TableRow>
+                        <TableCell sx={{ fontWeight: 'bold', backgroundColor: '#f5f5f5' }}>Risk Level</TableCell>
+                        <TableCell>{detailDialog.finding.risk_level || 'MEDIUM'}</TableCell>
+                      </TableRow>
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+
+                {/* Evidence Summary Table */}
+                <Typography variant="subtitle1" sx={{ fontWeight: 'bold', mb: 1 }}>Evidence Summary</Typography>
+                <TableContainer component={Paper} variant="outlined" sx={{ mb: 3 }}>
+                  <Table size="small">
+                    <TableHead>
+                      <TableRow sx={{ backgroundColor: '#1976d2' }}>
+                        <TableCell sx={{ color: 'white', fontWeight: 'bold' }}>Evidence Source</TableCell>
+                        <TableCell sx={{ color: 'white', fontWeight: 'bold' }}>Available</TableCell>
+                        <TableCell sx={{ color: 'white', fontWeight: 'bold' }}>Impact</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      <TableRow>
+                        <TableCell>SOC2 Report</TableCell>
+                        <TableCell sx={{ color: detailDialog.finding.soc_report ? 'green' : 'red' }}>
+                          {detailDialog.finding.soc_report ? '✓ Yes' : '✗ No'}
+                        </TableCell>
+                        <TableCell>{detailDialog.finding.soc_report ? 'Vendor controls documented' : 'Missing vendor assurance'}</TableCell>
+                      </TableRow>
+                      <TableRow>
+                        <TableCell>VAPT/Qualys Data</TableCell>
+                        <TableCell sx={{ color: detailDialog.finding.vapt_evidence ? 'green' : 'red' }}>
+                          {detailDialog.finding.vapt_evidence ? '✓ Yes' : '✗ No'}
+                        </TableCell>
+                        <TableCell>{detailDialog.finding.vapt_evidence ? 'Vulnerability data available' : 'Cannot verify vulnerabilities'}</TableCell>
+                      </TableRow>
+                      <TableRow>
+                        <TableCell>Patch Logs</TableCell>
+                        <TableCell sx={{ color: detailDialog.finding.patch_log ? 'green' : 'red' }}>
+                          {detailDialog.finding.patch_log ? '✓ Yes' : '✗ No'}
+                        </TableCell>
+                        <TableCell>{detailDialog.finding.patch_log ? 'Patch evidence found' : 'Cannot verify remediation'}</TableCell>
+                      </TableRow>
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+
+                {/* Compliance Reason */}
+                <Typography variant="subtitle1" sx={{ fontWeight: 'bold', mb: 1 }}>
+                  {detailDialog.finding.compliance_status === 'NON-COMPLIANT' ? 'Why Non-Compliant?' : 
+                   detailDialog.finding.compliance_status === 'COMPLIANT' ? 'Why Compliant?' : 'Why Review Required?'}
+                </Typography>
+                <Paper variant="outlined" sx={{ p: 2, backgroundColor: '#fafafa', mb: 2 }}>
+                  <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
+                    {(() => {
+                      const analysis = detailDialog.finding.analysis || '';
+                      // Extract gaps or compliance assessment section
+                      const gapsMatch = analysis.match(/GAPS IDENTIFIED:?([\s\S]*?)(?=RECOMMENDATION|$)/i);
+                      const assessmentMatch = analysis.match(/COMPLIANCE ASSESSMENT:?([\s\S]*?)(?=GAPS|RECOMMENDATION|$)/i);
+                      if (detailDialog.finding.compliance_status === 'NON-COMPLIANT' && gapsMatch) {
+                        return gapsMatch[1].trim();
+                      }
+                      if (assessmentMatch) {
+                        return assessmentMatch[1].trim();
+                      }
+                      return analysis.substring(0, 500) + (analysis.length > 500 ? '...' : '');
+                    })()}
+                  </Typography>
+                </Paper>
               </>
             )}
           </DialogContent>
           <DialogActions>
-            <Button onClick={() => setDetailDialog({ open: false, finding: null })}>Close</Button>
+            <Button onClick={() => setDetailDialog({ open: false, finding: null })} variant="contained">Close</Button>
           </DialogActions>
         </Dialog>
 
