@@ -62,15 +62,32 @@ def read_file_to_dataframe(bucket, key):
     if file_ext in ['xlsx', 'xls']:
         return pd.read_excel(io.BytesIO(file_content))
     elif file_ext == 'csv':
-        # Try different parsing options for malformed CSVs
+        # Check if this is a Qualys report (has special multi-section format)
+        content_str = file_content.decode('utf-8', errors='ignore')
+        lines = content_str.split('\n')
+        
+        # Find the vulnerability data header row (starts with "IP","DNS")
+        vuln_header_idx = None
+        for i, line in enumerate(lines):
+            if line.startswith('"IP","DNS"') or line.startswith('IP,DNS'):
+                vuln_header_idx = i
+                break
+        
+        if vuln_header_idx is not None:
+            # This is a Qualys report - read from vulnerability section (header=0 means first row after skip is header)
+            logger.info(f"Qualys report detected, reading from line {vuln_header_idx}")
+            try:
+                return pd.read_csv(io.BytesIO(file_content), skiprows=vuln_header_idx, header=0, on_bad_lines='skip')
+            except Exception as e:
+                logger.warning(f"Failed to parse Qualys vulnerability section: {e}")
+        
+        # Standard CSV parsing
         try:
             return pd.read_csv(io.BytesIO(file_content))
         except Exception:
             try:
-                # Try with error handling for bad lines
                 return pd.read_csv(io.BytesIO(file_content), on_bad_lines='skip')
             except Exception:
-                # Last resort: read as single column and let Athena handle it
                 return pd.read_csv(io.BytesIO(file_content), sep='\t', on_bad_lines='skip')
     return None
 

@@ -1210,13 +1210,16 @@ You are an IT Compliance Auditor for Keppel validating against 'Keppel Technolog
 - If status="Success": Proceed to query VAPT table
 
 **Step 3: Check for Vulnerabilities (VAPT/Qualys)**
-- Query: SELECT * FROM vapt_{system} LIMIT 20
-- Query: SELECT * FROM qualys WHERE LOWER(hostname) LIKE '%%{system}%%' LIMIT 20
-- If tables don't exist, state: "No VAPT/Qualys data available for [SystemName]"
-- Extract: CVE IDs, severity, affected hosts, dates found
+- For VAPT: Query SELECT * FROM vapt WHERE partition_0 = '{system}' LIMIT 20
+- For Qualys: Query SELECT col0 as IP, col1 as DNS, col9 as Title, col12 as Severity FROM qualys WHERE partition_0 = '{system}' AND col0 LIKE '10.%%' LIMIT 50
+- Count: SELECT COUNT(*) FROM qualys WHERE partition_0 = '{system}' AND col0 LIKE '10.%%'
+- The partition_0 column contains the system name (e.g., 'CyberArk', 'CATO', 'eInvoice')
+- If no data found, state: "No VAPT/Qualys data available for [SystemName]"
 
 **Step 4: Check for Patch Evidence**
-- Query system logs: SELECT * FROM {system} WHERE LOWER(col0) LIKE '%%patch%%' OR LOWER(col0) LIKE '%%kb%%' OR LOWER(col0) LIKE '%%update%%' LIMIT 50
+- Query system logs: SELECT col0 as Host, col1 as InstalledOn, col2 as Description, col3 as HotFixID FROM {system} WHERE col3 LIKE 'KB%%' LIMIT 100
+- IMPORTANT: Date column (col1) is STRING format like '1/17/26 12:00 AM' - do NOT use ORDER BY col1 as it sorts alphabetically not chronologically
+- To find recent patches, look for dates containing '/26' (2026) or '12/' or '11/' (late 2025)
 - Look for: KB numbers (e.g., KB5065687), patch dates, security updates
 - If no logs, state: "No patch logs available for [SystemName]"
 
